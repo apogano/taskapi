@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 
 
 from sqlalchemy import DateTime, String, func
@@ -10,7 +11,7 @@ from app.database import Base
 class Task(Base):
     __tablename__ = "tasks"
     
-    id: Mapped[UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     title : Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(String(2000))
     done: Mapped[bool] = mapped_column(default=False)
