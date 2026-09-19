@@ -1,5 +1,15 @@
 from uuid import UUID, uuid4
+import pytest
 
+
+@pytest.fixture(autouse=True)
+def alice(client, login_as):
+    client.headers.update(login_as("alice@example.com"))
+
+
+@pytest.fixture
+def bob_headers(login_as):
+    return login_as("bob@example.com")
 
 def create_task(client, **overrides):
     payload = {"title": "Learn FastAPI", **overrides}
@@ -106,3 +116,47 @@ def test_list_pagination_does_not_overlap(client):
 def test_list_rejects_out_of_range_limit(client):
     assert client.get("/tasks", params={"limit": 1000}).status_code == 422
     assert client.get("/tasks", params={"limit": 0}).status_code == 422
+
+def test_tasks_require_authentication(client):
+    client.headers.pop("Authorization")
+
+    assert client.get("/tasks").status_code == 401
+    assert client.post("/tasks", json={"title": "x"}).status_code == 401
+
+
+
+def test_list_returns_only_own_tasks(client, bob_headers):
+    mine = create_task(client, title="Alice's")
+    client.post("/tasks", json={"title": "Bob's"}, headers=bob_headers)
+
+    ids = [t["id"] for t in client.get("/tasks").json()]
+    assert ids == [mine["id"]]
+
+    bobs = client.get("/tasks", headers=bob_headers).json()
+    assert [t["title"] for t in bobs] == ["Bob's"]
+
+
+def test_cannot_read_other_users_task(client, bob_headers):
+    task = create_task(client)
+    response = client.get(f"/tasks/{task['id']}", headers=bob_headers)
+    assert response.status_code == 404
+
+
+def test_cannot_update_other_users_task(client, bob_headers):
+    task = create_task(client, title="Original")
+
+    response = client.patch(
+        f"/tasks/{task['id']}", json={"title": "Hacked"}, headers=bob_headers
+    )
+
+    assert response.status_code == 404
+    assert client.get(f"/tasks/{task['id']}").json()["title"] == "Original"
+
+
+def test_cannot_delete_other_users_task(client, bob_headers):
+    task = create_task(client)
+
+    response = client.delete(f"/tasks/{task['id']}", headers=bob_headers)
+
+    assert response.status_code == 404
+    assert client.get(f"/tasks/{task['id']}").status_code == 200

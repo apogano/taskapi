@@ -59,3 +59,14 @@ def client(db):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+@pytest.fixture
+def login_as(client):
+    def _login(email: str, password: str = "test-password") -> dict:
+        client.post("/auth/register", json={"email": email, "password": password})
+        response = client.post(
+            "/auth/login", data={"username": email, "password": password}
+        )
+        return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+    return _login
