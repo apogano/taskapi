@@ -12,7 +12,7 @@ class UserRepository:
     def get(self, user_id: UUID) -> User | None:
         return self.db.get(User, user_id)
     
-    def get(self, email: str) -> User | None:
+    def get_by_email(self, email: str) -> User | None:
         return self.db.scalar(select(User).where(User.email == email))
 
     def add(self, user:User) -> User:
