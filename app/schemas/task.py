@@ -19,5 +19,6 @@ class TaskRead(BaseModel):
     title: str
     description: str | None
     done: bool
+    priority: int
     created_at: datetime
     
