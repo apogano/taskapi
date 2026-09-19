@@ -1,0 +1,10 @@
+from fastapi import FastAPI
+
+from app.database import Base, engine
+from app.routers import tasks
+
+# Προσωρινό: στο επόμενο βήμα το αντικαθιστούμε με Alembic migrations
+Base.metadata.create_all(engine)
+
+app = FastAPI(title="Task API")
+app.include_router(tasks.router)

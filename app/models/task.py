@@ -1,10 +1,11 @@
 from datetime import datetime
-from uuid import UUID
 
-from sqlalchemy import Datetime, String, func
+
+from sqlalchemy import DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
 
-from app.databse import Base
+from app.database import Base
 
 class Task(Base):
     __tablename__ = "tasks"
@@ -13,5 +14,5 @@ class Task(Base):
     title : Mapped[str] = mapped_column(String(200))
     description: Mapped[str | None] = mapped_column(String(2000))
     done: Mapped[bool] = mapped_column(default=False)
-    created_at : Mapped[datetime] = mapped_column (Datetime(timezone=True),server_default=func.now())
+    created_at : Mapped[datetime] = mapped_column (DateTime(timezone=True),server_default=func.now())
 
