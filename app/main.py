@@ -15,3 +15,7 @@ register_exception_handlers(app)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tasks.router)
+
+@app.get("/health", tags=["health"])
+def health():
+    return {"status": "ok"}
