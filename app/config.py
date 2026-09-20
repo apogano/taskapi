@@ -5,7 +5,8 @@ class Settings(BaseSettings):
     secret_key: str
     access_token_expire_minutes: int = 30
     jwt_algorithm: str = "HS256"
-    
+    log_level: str = "INFO"
+    log_json: bool = False
     
     model_config = SettingsConfigDict(env_file=".env")
 

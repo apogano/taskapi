@@ -1,10 +1,13 @@
 from uuid import UUID
+import logging
 
 from sqlalchemy.orm import Session
 
 from app.models import Task
 from app.repositories.task import TaskRepository
 from app.schemas.task import TaskCreate, TaskUpdate
+
+logger = logging.getLogger(__name__)
 
 class TaskNotFoundError(Exception):
     def __init__(self, task_id:UUID):
@@ -20,6 +23,7 @@ class TaskService:
         task = self.repo.add(Task(**payload.model_dump(), owner_id=owner_id))
         self.db.commit()
         self.db.refresh(task)
+        logger.info("Task created id=%s owner=%s", task.id, owner_id)
         return task
         
     def get(self,  owner_id:UUID, task_uuid:UUID) -> Task:
@@ -43,3 +47,4 @@ class TaskService:
         task = self.get(owner_id,task_id)
         self.repo.delete(task)
         self.db.commit()
+        logger.info("Task deleted id=%s owner=%s", task_id, owner_id)

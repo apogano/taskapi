@@ -1,11 +1,16 @@
 from uuid import UUID
+import logging
 
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.models import User
 from app.repositories.user import UserRepository
 from app.schemas import UserCreate
 from app.security import DUMMY_HASH, hash_password, verify_password
+
+
+logger = logging.getLogger(__name__)
 
 class EmailAlreadyRegisteredError(Exception):
     pass
@@ -22,12 +27,17 @@ class UserService:
         email = payload.email.lower()
         if self.repo.get_by_email(email) is not None:
             raise EmailAlreadyRegisteredError
-        
-        user = self.repo.add(
-            User(email=email, hashed_password=hash_password(payload.password))
-        )
-        self.db.commit()
+        try:
+            user = self.repo.add(
+                User(email=email, hashed_password=hash_password(payload.password))
+            )
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            raise EmailAlreadyRegisteredError(email) from None
+            
         self.db.refresh(user)
+        logger.info("User registered id=%s",user.id)
         return user
     
     def authenticate(self, email:str, password: str) -> User:
@@ -35,8 +45,15 @@ class UserService:
         if user is None:
             #Same time in case the user exists
             verify_password(password,DUMMY_HASH)
-            raise InvalidCredentialsError()
-        if not verify_password(password, user.hashed_password) or not user.is_active:
+        
+        valid = (
+            user is not None
+            and verify_password(password,user.hashed_password)
+            and user.is_active
+        )
+
+        if not valid:
+            logger.warning("Failed login attempt")
             raise InvalidCredentialsError()
         return user
     
