@@ -1,4 +1,5 @@
 from uuid import UUID, uuid4
+
 import pytest
 
 
@@ -11,6 +12,7 @@ def alice(client, login_as):
 def bob_headers(login_as):
     return login_as("bob@example.com")
 
+
 def create_task(client, **overrides):
     payload = {"title": "Learn FastAPI", **overrides}
     response = client.post("/tasks", json=payload)
@@ -19,7 +21,9 @@ def create_task(client, **overrides):
 
 
 def test_create_task(client):
-    response = client.post("/tasks", json={"title": "Learn FastAPI", "description": "Basics"})
+    response = client.post(
+        "/tasks", json={"title": "Learn FastAPI", "description": "Basics"}
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -32,17 +36,18 @@ def test_create_task(client):
 def test_create_task_with_empty_title_is_rejected(client):
     response = client.post("/tasks", json={"title": ""})
     assert response.status_code == 422
-    
+
+
 def test_create_task_with_max_length_description_is_accepted(client):
-    response = client.post(
-        "/tasks", json={"title": "Test", "description": "x" * 2000}
-    )
+    response = client.post("/tasks", json={"title": "Test", "description": "x" * 2000})
     assert response.status_code == 201
 
 
 def test_create_task_with_long_description_is_rejected(client):
     long_description = "x" * 2001
-    response = client.post("/tasks", json={"title": "testDescription","description":long_description})
+    response = client.post(
+        "/tasks", json={"title": "testDescription", "description": long_description}
+    )
     assert response.status_code == 422
     assert response.json()["detail"][0]["type"] == "string_too_long"
 
@@ -50,7 +55,7 @@ def test_create_task_with_long_description_is_rejected(client):
 def test_update_task_with_empty_title_is_rejected(client):
     task = create_task(client, title="Original", description="Test empty title")
     response = client.patch(f"/tasks/{task['id']}", json={"title": ""})
-    assert response.status_code == 422    
+    assert response.status_code == 422
     assert client.get(f"/tasks/{task['id']}").json()["title"] == "Original"
 
 
@@ -117,12 +122,12 @@ def test_list_rejects_out_of_range_limit(client):
     assert client.get("/tasks", params={"limit": 1000}).status_code == 422
     assert client.get("/tasks", params={"limit": 0}).status_code == 422
 
+
 def test_tasks_require_authentication(client):
     client.headers.pop("Authorization")
 
     assert client.get("/tasks").status_code == 401
     assert client.post("/tasks", json={"title": "x"}).status_code == 401
-
 
 
 def test_list_returns_only_own_tasks(client, bob_headers):

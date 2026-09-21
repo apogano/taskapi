@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.orm import Session
 
-import app.models  # noqa: F401  
+import app.models
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
@@ -13,7 +13,9 @@ TEST_URL = _dev_url.set(database=f"{_dev_url.database}_test")
 
 
 def _ensure_database() -> None:
-    admin = create_engine(TEST_URL.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    admin = create_engine(
+        TEST_URL.set(database="postgres"), isolation_level="AUTOCOMMIT"
+    )
     with admin.connect() as conn:
         exists = conn.scalar(
             text("SELECT 1 FROM pg_database WHERE datname = :name"),
@@ -26,7 +28,7 @@ def _ensure_database() -> None:
 
 @pytest.fixture(scope="session")
 def engine():
-    assert TEST_URL.database.endswith("_test")  
+    assert TEST_URL.database.endswith("_test")
     _ensure_database()
     engine = create_engine(TEST_URL)
     Base.metadata.drop_all(engine)
@@ -59,6 +61,7 @@ def client(db):
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
 
 @pytest.fixture
 def login_as(client):
