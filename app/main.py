@@ -1,11 +1,10 @@
 from fastapi import FastAPI
 
-from app.errors import register_exception_handlers
 from app.config import settings
+from app.errors import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import request_context_middleware
 from app.routers import auth, tasks, users
-
 
 setup_logging()
 
