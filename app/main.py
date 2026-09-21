@@ -1,4 +1,3 @@
-import os
 from fastapi import FastAPI
 
 from app.errors import register_exception_handlers
