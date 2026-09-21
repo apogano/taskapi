@@ -25,4 +25,11 @@ pythonpath = ["."]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.16.8",
 ]
+
+[tool.ruff]
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "RUF100"]
