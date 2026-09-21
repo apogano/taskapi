@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.config import settings
 from app.errors import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import request_context_middleware
@@ -7,7 +8,15 @@ from app.routers import auth, tasks, users
 
 setup_logging()
 
-app = FastAPI(title="Task API")
+docs = settings.enable_docs
+
+app = FastAPI(
+    title="Task API",
+    docs_url="/docs" if docs else None,
+    redoc_url="/redoc" if docs else None,
+    openapi_url="/openapi.json" if docs else None,
+)
+
 app.middleware("http")(request_context_middleware)
 register_exception_handlers(app)
 
