@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     log_level: str = "INFO"
     log_json: bool = False
+    enable_docs: bool = False
 
     model_config = SettingsConfigDict(env_file=".env")
 
