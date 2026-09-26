@@ -1,4 +1,4 @@
-from uuid import UUID
+from datetime import UTC
 
 EMAIL = "alice@example.com"
 PASSWORD = "test-password"
@@ -79,7 +79,7 @@ def test_refresh_with_unknown_token_returns_401(client):
 
 
 def test_refresh_with_expired_token_returns_401(client, db):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     from app.models import RefreshToken
 
@@ -89,7 +89,7 @@ def test_refresh_with_expired_token_returns_401(client, db):
     record = db.query(RefreshToken).filter(
         RefreshToken.user_id.isnot(None)
     ).order_by(RefreshToken.created_at.desc()).first()
-    record.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
+    record.expires_at = datetime.now(UTC) - timedelta(days=1)
     db.commit()
 
     response = refresh(client, tokens["refresh_token"])
@@ -136,5 +136,7 @@ def test_new_login_creates_separate_family_from_previous(client, db):
     assert len(families) == 2  # two different logins -> two different families
 
     # The first login's refresh token must continue valid
-    response = refresh(client, first_login["refresh_token"])
-    assert response.status_code == 200
+    first_response = refresh(client, first_login["refresh_token"])
+    assert first_response.status_code == 200
+    second_response = refresh(client, second_login["refresh_token"])    
+    assert second_response.status_code == 200
