@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -30,3 +30,13 @@ class RefreshTokenRepository:
             RefreshToken.revoked_at.is_(None),
         ).update({"revoked_at":datetime.now(UTC)})
 
+    def delete_expired_and_revoked(self, revoked_grace_period_days: int = 7) -> int:
+        now = datetime.now(UTC)
+        grace_cutoff = now - timedelta(days=revoked_grace_period_days)
+
+        result = self.db.query(RefreshToken).filter(
+            (RefreshToken.expires_at < now)
+            | (RefreshToken.revoked_at.isnot(None) & (RefreshToken.revoked_at < grace_cutoff))
+        ).delete(synchronize_session=False)
+
+        return result
