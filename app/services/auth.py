@@ -29,7 +29,7 @@ class AuthService:
     ):
         self.db = db
         self.repo = repo
-        self.user_repo: user_repo
+        self.user_repo = user_repo
         
     
     def issue_tokens(self, user:User, family_id: UUID | None = None) -> TokenPair:
@@ -107,7 +107,7 @@ class AuthService:
         
     def revoke(self, raw_token:str) -> None:
         """ Logout:revokes only specific token(not the family)"""
-        record = self.repot.get_by_hash(hash_refresh_token(raw_token))
+        record = self.repo.get_by_hash(hash_refresh_token(raw_token))
         if record is None:
             return
         if record.revoked_at is not None:

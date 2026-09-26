@@ -65,7 +65,7 @@ def test_login_returns_bearer_token(client):
     body = response.json()
     assert body["token_type"] == "bearer"
     assert body["access_token"]
-
+    assert body["refresh_token"]
 
 def test_login_with_wrong_password_returns_401(client):
     register(client)
