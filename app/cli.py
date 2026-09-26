@@ -8,6 +8,7 @@ from app.repositories.refresh_token import RefreshTokenRepository
 
 logger = logging.getLogger(__name__)
 
+
 def cleanup_refresh_tokens() -> None:
     db = SessionLocal()
     try:

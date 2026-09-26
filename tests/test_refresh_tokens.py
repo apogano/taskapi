@@ -67,8 +67,8 @@ def test_reuse_of_revoked_token_revokes_whole_family(client):
     reuse_attempt = refresh(client, tokens["refresh_token"])
     assert reuse_attempt.status_code == 401
 
-    # The first token which is legit should be also revoked 
-    #as it belongs to same family 
+    # The first token which is legit should be also revoked
+    # as it belongs to same family
     third = refresh(client, first_rotation["refresh_token"])
     assert third.status_code == 401
 
@@ -86,9 +86,12 @@ def test_refresh_with_expired_token_returns_401(client, db):
     register(client)
     tokens = login(client).json()
 
-    record = db.query(RefreshToken).filter(
-        RefreshToken.user_id.isnot(None)
-    ).order_by(RefreshToken.created_at.desc()).first()
+    record = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.user_id.isnot(None))
+        .order_by(RefreshToken.created_at.desc())
+        .first()
+    )
     record.expires_at = datetime.now(UTC) - timedelta(days=1)
     db.commit()
 
@@ -138,5 +141,5 @@ def test_new_login_creates_separate_family_from_previous(client, db):
     # The first login's refresh token must continue valid
     first_response = refresh(client, first_login["refresh_token"])
     assert first_response.status_code == 200
-    second_response = refresh(client, second_login["refresh_token"])    
+    second_response = refresh(client, second_login["refresh_token"])
     assert second_response.status_code == 200

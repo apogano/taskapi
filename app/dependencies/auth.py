@@ -31,6 +31,7 @@ def get_user_service(
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
 
+
 def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], service: UserServiceDep
 ) -> User:
@@ -56,13 +57,14 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-def get_refresh_token_repository(db:DbSession) -> RefreshTokenRepository:
+def get_refresh_token_repository(db: DbSession) -> RefreshTokenRepository:
     return RefreshTokenRepository(db)
 
+
 def get_auth_service(
-    db:DbSession,
+    db: DbSession,
     repo: Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)],
-    user_repo: Annotated[UserRepository,Depends(get_user_repository)]
+    user_repo: Annotated[UserRepository, Depends(get_user_repository)],
 ) -> AuthService:
     return AuthService(db, repo, user_repo)
 

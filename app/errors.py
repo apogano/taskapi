@@ -31,4 +31,4 @@ def register_exception_handlers(app: FastAPI) -> None:
             status_code=401,
             content={"detail": "Invalid or expired refresh token"},
             headers={"WWW-Authenticate": "Bearer"},
-    )
+        )

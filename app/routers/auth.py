@@ -20,16 +20,22 @@ def register(payload: schemas.UserCreate, service: UserServiceDep):
 def login(
     form: Annotated[OAuth2PasswordRequestForm, Depends()],
     user_service: UserServiceDep,
-    auth_service: AuthServiceDep
+    auth_service: AuthServiceDep,
 ):
     user = user_service.authenticate(form.username, form.password)
     pair = auth_service.issue_tokens(user)
-    return schemas.TokenPair(access_token=pair.access_token, refresh_token=pair.refresh_token)
+    return schemas.TokenPair(
+        access_token=pair.access_token, refresh_token=pair.refresh_token
+    )
+
 
 @router.post("/refresh", response_model=schemas.TokenPair)
 def refresh(payload: schemas.RefreshRequest, auth_service: AuthServiceDep):
     pair, _ = auth_service.rotate(payload.refresh_token)
-    return schemas.TokenPair(access_token=pair.access_token, refresh_token=pair.refresh_token)
+    return schemas.TokenPair(
+        access_token=pair.access_token, refresh_token=pair.refresh_token
+    )
+
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(payload: schemas.RefreshRequest, auth_service: AuthServiceDep):
