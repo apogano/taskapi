@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import User
+from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.user import UserRepository
 from app.security import decode_access_token
+from app.services.auth import AuthService
 from app.services.user import UserService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -28,7 +30,6 @@ def get_user_service(
 
 
 UserServiceDep = Annotated[UserService, Depends(get_user_service)]
-
 
 def get_current_user(
     token: Annotated[str, Depends(oauth2_scheme)], service: UserServiceDep
@@ -53,3 +54,17 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def get_refresh_token_repository(db:DbSession) -> RefreshTokenRepository:
+    return RefreshTokenRepository(db)
+
+def get_auth_service(
+    db:DbSession,
+    repo: Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)],
+    user_repo: Annotated[UserRepository,Depends(get_user_repository)]
+) -> AuthService:
+    return AuthService(db, repo, user_repo)
+
+
+AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
