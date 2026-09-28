@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_json: bool = False
     enable_docs: bool = False
+    rate_limit_backend: str = "postgres"
+    rate_limit_login_attempts: int = 5
+    rate_limit_login_window_seconds: int = 900  # 15 minutes
+    rate_limit_register_attempts: int = 3
+    rate_limit_register_window_seconds: int = 3600  # 1 hour
+    rate_limit_refresh_attempts: int = 20
+    rate_limit_refresh_window_seconds: int = 900
 
     model_config = SettingsConfigDict(env_file=".env")
 
