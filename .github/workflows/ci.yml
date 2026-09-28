@@ -90,6 +90,10 @@ jobs:
           gcloud run jobs update taskapi-migrate --image "$IMAGE" --region "$REGION"
           gcloud run jobs execute taskapi-migrate --region "$REGION" --wait
 
+      - name: Update token cleanup job
+        run: |
+          gcloud run jobs update taskapi-cleanup-tokens --image "$IMAGE" --region "$REGION"
+
       - name: Deploy
         run: gcloud run deploy taskapi --image "$IMAGE" --region "$REGION"
 
