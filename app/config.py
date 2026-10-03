@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     rate_limit_register_window_seconds: int = 3600  # 1 hour
     rate_limit_refresh_attempts: int = 20
     rate_limit_refresh_window_seconds: int = 900
+    rate_limit_login_account_attempts: int = 10
+    rate_limit_login_account_window_seconds: int = 900   # 15 λεπτά    
 
     model_config = SettingsConfigDict(env_file=".env")
 

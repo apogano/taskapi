@@ -13,20 +13,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 def enforce_rate_limit(
-    request: Request,
     limiter: RateLimiterDep,
-    key_suffix: str,
-    limit: int,
-    window_seconds: int,
+    *checks: tuple[str, int, int],
 ) -> None:
-    key = f"{key_suffix}:{client_ip(request)}"
-    result = limiter.hit(key, limit=limit, window_seconds=window_seconds)
-    if not result.allowed:
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            "Too many attempts, please try again later.",
-            headers={"Retry-After": str(result.retry_after_seconds)},
-        )
+    """Each check is (key, limit, window_seconds). All checks must pass;
+    the first one that fails raises a 429 immediately."""
+    for key, limit, window_seconds in checks:
+        result = limiter.hit(key, limit=limit, window_seconds=window_seconds)
+        if not result.allowed:
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Too many attempts, please try again later",
+                headers={"Retry-After": str(result.retry_after_seconds)},
+            )
 
 
 @router.post(
@@ -39,11 +38,10 @@ def register(
     limiter: RateLimiterDep,
 ):
     enforce_rate_limit(
-        request,
         limiter,
-        "register",
+        (f"register:{client_ip(request)}",
         settings.rate_limit_register_attempts,
-        settings.rate_limit_register_window_seconds,
+        settings.rate_limit_register_window_seconds),
     )
     return service.register(payload)
 
@@ -56,13 +54,17 @@ def login(
     auth_service: AuthServiceDep,
     limiter: RateLimiterDep,
 ):
+    # Two independent checks, both must pass:
+    # - per-IP: stops one IP hammering many accounts
+    # - per-account: stops one account being hammered from many IPs
     enforce_rate_limit(
-        request,
         limiter,
-        "login",
-        settings.rate_limit_login_attempts,
-        settings.rate_limit_login_window_seconds,
+        (f"login:{client_ip(request)}", settings.rate_limit_login_attempts,
+         settings.rate_limit_login_window_seconds),
+        (f"login-account:{form.username.strip().lower()}", settings.rate_limit_login_account_attempts,
+         settings.rate_limit_login_account_window_seconds),
     )
+    
     user = user_service.authenticate(form.username, form.password)
     pair = auth_service.issue_tokens(user)
     return schemas.TokenPair(
@@ -78,11 +80,9 @@ def refresh(
     limiter: RateLimiterDep,
 ):
     enforce_rate_limit(
-        request,
         limiter,
-        "refresh",
-        settings.rate_limit_refresh_attempts,
-        settings.rate_limit_refresh_window_seconds,
+        (f"refresh:{client_ip(request)}", settings.rate_limit_refresh_attempts,
+         settings.rate_limit_refresh_window_seconds),
     )
     pair, _ = auth_service.rotate(payload.refresh_token)
     return schemas.TokenPair(
