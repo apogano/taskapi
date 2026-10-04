@@ -39,9 +39,11 @@ def register(
 ):
     enforce_rate_limit(
         limiter,
-        (f"register:{client_ip(request)}",
-        settings.rate_limit_register_attempts,
-        settings.rate_limit_register_window_seconds),
+        (
+            f"register:{client_ip(request)}",
+            settings.rate_limit_register_attempts,
+            settings.rate_limit_register_window_seconds,
+        ),
     )
     return service.register(payload)
 
@@ -59,12 +61,18 @@ def login(
     # - per-account: stops one account being hammered from many IPs
     enforce_rate_limit(
         limiter,
-        (f"login:{client_ip(request)}", settings.rate_limit_login_attempts,
-         settings.rate_limit_login_window_seconds),
-        (f"login-account:{form.username.strip().lower()}", settings.rate_limit_login_account_attempts,
-         settings.rate_limit_login_account_window_seconds),
+        (
+            f"login:{client_ip(request)}",
+            settings.rate_limit_login_attempts,
+            settings.rate_limit_login_window_seconds,
+        ),
+        (
+            f"login-account:{form.username.strip().lower()}",
+            settings.rate_limit_login_account_attempts,
+            settings.rate_limit_login_account_window_seconds,
+        ),
     )
-    
+
     user = user_service.authenticate(form.username, form.password)
     pair = auth_service.issue_tokens(user)
     return schemas.TokenPair(
@@ -81,8 +89,11 @@ def refresh(
 ):
     enforce_rate_limit(
         limiter,
-        (f"refresh:{client_ip(request)}", settings.rate_limit_refresh_attempts,
-         settings.rate_limit_refresh_window_seconds),
+        (
+            f"refresh:{client_ip(request)}",
+            settings.rate_limit_refresh_attempts,
+            settings.rate_limit_refresh_window_seconds,
+        ),
     )
     pair, _ = auth_service.rotate(payload.refresh_token)
     return schemas.TokenPair(

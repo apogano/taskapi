@@ -1,5 +1,5 @@
 from app.config import settings
-    
+
 EMAIL = "alice@example.com"
 PASSWORD = "test-password"
 
@@ -75,9 +75,7 @@ def test_per_account_limit_blocks_attacks_spread_across_many_ips(client):
         response = login_from_ip(client, f"10.0.0.{i}", password="wrong-password")
         assert response.status_code == 401  # still under the account limit
 
-    blocked = login_from_ip(
-        client, "10.0.0.999", password="wrong-password"
-    )
+    blocked = login_from_ip(client, "10.0.0.999", password="wrong-password")
     assert blocked.status_code == 429
 
 
@@ -87,7 +85,9 @@ def test_per_account_limit_is_independent_of_ip_limit(client):
 
     # Exhaust alice's account-scoped limit from many different IPs.
     for i in range(settings.rate_limit_login_account_attempts):
-        login_from_ip(client, f"10.0.1.{i}", email="alice@example.com", password="wrong-password")
+        login_from_ip(
+            client, f"10.0.1.{i}", email="alice@example.com", password="wrong-password"
+        )
 
     alice_blocked = login_from_ip(
         client, "10.0.1.999", email="alice@example.com", password="wrong-password"

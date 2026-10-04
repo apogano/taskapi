@@ -48,8 +48,7 @@ def test_concurrent_hits_are_counted_correctly(db):
     # increments "lost")
     next_result = limiter.hit("race-key", limit=20, window_seconds=60)
     assert next_result.allowed is False
-    
-    
+
 
 def test_client_ip_prefers_x_forwarded_for():
     request = MagicMock()
