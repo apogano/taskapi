@@ -18,6 +18,7 @@ I built it as a hands-on project to learn production-style backend development: 
 - Tests run against a real PostgreSQL database, each test isolated in a rolled-back transaction
 - CI/CD with GitHub Actions and keyless authentication to GCP (Workload Identity Federation)
 - A scheduled Cloud Run Job clears expired and revoked refresh tokens daily
+- Rate limiting on `/auth/register`, `/auth/login` and `/auth/refresh`, enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
 
 ## Tech stack
 
@@ -47,6 +48,8 @@ I built it as a hands-on project to learn production-style backend development: 
 | `GET` | `/health` | Liveness check (does not touch the database) | no |
 
 "Auth" here means the bearer access token on the `Authorization` header. `/auth/refresh` and `/auth/logout` instead take a refresh token in the JSON body, since that is the credential they operate on.
+
+`/auth/register`, `/auth/login` and `/auth/refresh` are rate limited and return `429` with a `Retry-After` header once the limit is exceeded.
 
 Interactive docs are available at `/docs` when `ENABLE_DOCS=true`. They are disabled by default, so they are off in production.
 
@@ -118,6 +121,11 @@ Settings are read from environment variables (or from `.env` locally).
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `LOG_JSON` | `false` | JSON logs (used on Cloud Run) instead of plain text |
 | `ENABLE_DOCS` | `false` | Serve `/docs`, `/redoc` and `/openapi.json` |
+| `RATE_LIMIT_BACKEND` | `postgres` | Rate limit storage backend (see Design notes) |
+| `RATE_LIMIT_LOGIN_ATTEMPTS` / `RATE_LIMIT_LOGIN_WINDOW_SECONDS` | `5` / `900` | Per-IP login attempts |
+| `RATE_LIMIT_LOGIN_ACCOUNT_ATTEMPTS` / `RATE_LIMIT_LOGIN_ACCOUNT_WINDOW_SECONDS` | `10` / `900` | Per-account login attempts |
+| `RATE_LIMIT_REGISTER_ATTEMPTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | `3` / `3600` | Per-IP registration attempts |
+| `RATE_LIMIT_REFRESH_ATTEMPTS` / `RATE_LIMIT_REFRESH_WINDOW_SECONDS` | `20` / `900` | Per-IP refresh attempts |
 
 ## Development
 
@@ -161,6 +169,7 @@ app/
 ├── middleware.py      # request ID, request log, catch-all 500
 ├── errors.py          # domain exceptions -> HTTP responses
 ├── cli.py             # maintenance commands (refresh token cleanup), run outside the request cycle
+├── rate_limiting/     # RateLimiter interface + PostgreSQL implementation
 ├── dependencies/      # FastAPI dependency providers (services, current user)
 ├── routers/           # HTTP layer only
 ├── services/          # business logic and transaction boundaries
@@ -183,6 +192,7 @@ infra/cleanup-policy.json   # Artifact Registry cleanup policy
 - **Refresh token rotation.** Refresh tokens are random values, stored in the database only as a SHA-256 hash (never as plain text, unlike the JWT access token which is never persisted at all). Each successful `/auth/refresh` call revokes the token just used and issues a new one in its place, so a refresh token works exactly once. Every token belongs to a `family_id` created at login. If a token that has already been rotated is presented again — the signature of a stolen, replayed token — the entire family is revoked, logging that user out on every device until they log in again. A separate `taskapi-cleanup-tokens` Cloud Run Job, triggered daily by Cloud Scheduler, deletes expired and long-revoked rows so the table doesn't grow unbounded; revoked rows are kept for a short grace period before deletion in case they are needed to investigate an incident.
 - **Logging.** One structured log line per request (method, path, status, duration), never bodies, query strings, passwords or tokens. The `X-Request-ID` header is accepted only if it is short and alphanumeric, to prevent log injection.
 - **Task ids are UUIDs**, so they are not guessable or enumerable.
+- **Rate limiting is behind a `RateLimiter` interface** (`app/rate_limiting/base.py`) with a single `hit(key, limit, window_seconds)` method. The only implementation today is PostgreSQL-backed, using an atomic `INSERT ... ON CONFLICT DO UPDATE count = count + 1` fixed-window counter, which stays correct under concurrent requests across multiple Cloud Run instances without needing a lock or a read-then-write round trip. Redis would be the conventional choice for this, but it requires an always-on Memorystore instance (no free tier, no scale-to-zero) plus a Serverless VPC Access connector for Cloud Run to reach it — not worth the cost and complexity at this project's scale when Postgres, which is already there, does the job correctly. The interface means swapping in a Redis-backed implementation later touches one dependency provider, not the endpoints. Login is protected by two independent limits: per-IP (stops one IP hammering many accounts) and per-account (stops one account being hammered from many IPs, e.g. a botnet); the account-scoped key is the submitted email as-is, so the check never has to look up whether the account exists.
 
 ## Deployment
 
@@ -351,9 +361,8 @@ While the database is stopped, endpoints that need it return `500`; `/health` ke
 - User roles / permission levels
 - Background jobs (Cloud Tasks or Pub/Sub), for example notifications when a task is completed
 - File attachments in Cloud Storage with signed URLs
-- Rate limiting on the auth endpoints
 - Alerts on 5xx errors in Cloud Monitoring
 
 ## License
 
-MIT — see `LICENSE`.
+See [LICENSE](LICENSE).
