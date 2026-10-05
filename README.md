@@ -19,6 +19,8 @@ I built it as a hands-on project to learn production-style backend development: 
 - CI/CD with GitHub Actions and keyless authentication to GCP (Workload Identity Federation)
 - A scheduled Cloud Run Job clears expired and revoked refresh tokens daily
 - Rate limiting on `/auth/register`, `/auth/login` and `/auth/refresh`, enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
+- File attachments on tasks, stored in Cloud Storage: the API never handles file bytes, it only issues short-lived signed URLs for the client to upload to and download from directly
+- A second scheduled Cloud Run Job clears attachments that were never confirmed after upload
 
 ## Tech stack
 
@@ -45,9 +47,15 @@ I built it as a hands-on project to learn production-style backend development: 
 | `GET` | `/tasks/{id}` | Get one task | yes |
 | `PATCH` | `/tasks/{id}` | Partial update | yes |
 | `DELETE` | `/tasks/{id}` | Delete a task | yes |
+| `POST` | `/tasks/{id}/attachments` | Create a pending attachment, returns a signed upload URL | yes |
+| `POST` | `/tasks/{id}/attachments/{attachment_id}/confirm` | Confirm an upload finished; validates the file size | yes |
+| `GET` | `/tasks/{id}/attachments/{attachment_id}/download-url` | Get a signed download URL (only once uploaded) | yes |
+| `DELETE` | `/tasks/{id}/attachments/{attachment_id}` | Delete an attachment, from storage and the database | yes |
 | `GET` | `/health` | Liveness check (does not touch the database) | no |
 
 "Auth" here means the bearer access token on the `Authorization` header. `/auth/refresh` and `/auth/logout` instead take a refresh token in the JSON body, since that is the credential they operate on.
+
+Attachments are a three-step flow: `POST .../attachments` creates the record and returns a signed URL; the client `PUT`s the file straight to that URL (never through this API); then `POST .../confirm` checks the uploaded file's real size against `ATTACHMENT_MAX_SIZE_MB` and marks it ready. `download-url` and `DELETE` work the same way — the client talks to Cloud Storage directly using the URL the API hands it.
 
 `/auth/register`, `/auth/login` and `/auth/refresh` are rate limited and return `429` with a `Retry-After` header once the limit is exceeded.
 
@@ -107,6 +115,21 @@ uv run uvicorn app.main:app --reload
 
 The API is now on http://localhost:8000 and, with `ENABLE_DOCS=true`, the docs on http://localhost:8000/docs.
 
+Everything except attachments works at this point. Attachments sign URLs through the IAM Credentials API rather than a local private key (see Design notes), so they also work locally, but need one-time setup:
+
+```bash
+gcloud auth application-default login
+gcloud iam service-accounts add-iam-policy-binding \
+  taskapi-run@your-project-id.iam.gserviceaccount.com \
+  --member="user:your-email@example.com" --role="roles/iam.serviceAccountTokenCreator"
+```
+
+then add to `.env`:
+```
+GCS_BUCKET_NAME=your-project-id-attachments
+GCS_SIGNER_SERVICE_ACCOUNT=taskapi-run@your-project-id.iam.gserviceaccount.com
+```
+
 ### Configuration
 
 Settings are read from environment variables (or from `.env` locally).
@@ -126,6 +149,10 @@ Settings are read from environment variables (or from `.env` locally).
 | `RATE_LIMIT_LOGIN_ACCOUNT_ATTEMPTS` / `RATE_LIMIT_LOGIN_ACCOUNT_WINDOW_SECONDS` | `10` / `900` | Per-account login attempts |
 | `RATE_LIMIT_REGISTER_ATTEMPTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | `3` / `3600` | Per-IP registration attempts |
 | `RATE_LIMIT_REFRESH_ATTEMPTS` / `RATE_LIMIT_REFRESH_WINDOW_SECONDS` | `20` / `900` | Per-IP refresh attempts |
+| `GCS_BUCKET_NAME` | required for attachments | Cloud Storage bucket for attachments |
+| `GCS_SIGNER_SERVICE_ACCOUNT` | required for attachments | Service account used to sign upload/download URLs (see Design notes) |
+| `ATTACHMENT_UPLOAD_URL_EXPIRE_MINUTES` / `ATTACHMENT_DOWNLOAD_URL_EXPIRE_MINUTES` | `15` / `15` | Signed URL lifetime |
+| `ATTACHMENT_MAX_SIZE_MB` | `25` | Rejected (and deleted) at confirm time if exceeded |
 
 ## Development
 
@@ -168,13 +195,14 @@ app/
 ├── logging_config.py  # text/JSON logging with request ID
 ├── middleware.py      # request ID, request log, catch-all 500
 ├── errors.py          # domain exceptions -> HTTP responses
-├── cli.py             # maintenance commands (refresh token cleanup), run outside the request cycle
+├── cli.py             # maintenance commands (stale token/attachment cleanup), run outside the request cycle
+├── storage.py         # Cloud Storage signed URL generation (IAM-based signing)
 ├── rate_limiting/     # RateLimiter interface + PostgreSQL implementation
 ├── dependencies/      # FastAPI dependency providers (services, current user)
 ├── routers/           # HTTP layer only
 ├── services/          # business logic and transaction boundaries
 ├── repositories/      # database queries only
-├── models/            # SQLAlchemy models (Task, User, RefreshToken)
+├── models/            # SQLAlchemy models (Task, User, RefreshToken, Attachment)
 └── schemas/           # Pydantic request/response models
 migrations/            # Alembic
 tests/
@@ -192,6 +220,8 @@ infra/cleanup-policy.json   # Artifact Registry cleanup policy
 - **Refresh token rotation.** Refresh tokens are random values, stored in the database only as a SHA-256 hash (never as plain text, unlike the JWT access token which is never persisted at all). Each successful `/auth/refresh` call revokes the token just used and issues a new one in its place, so a refresh token works exactly once. Every token belongs to a `family_id` created at login. If a token that has already been rotated is presented again — the signature of a stolen, replayed token — the entire family is revoked, logging that user out on every device until they log in again. A separate `taskapi-cleanup-tokens` Cloud Run Job, triggered daily by Cloud Scheduler, deletes expired and long-revoked rows so the table doesn't grow unbounded; revoked rows are kept for a short grace period before deletion in case they are needed to investigate an incident.
 - **Logging.** One structured log line per request (method, path, status, duration), never bodies, query strings, passwords or tokens. The `X-Request-ID` header is accepted only if it is short and alphanumeric, to prevent log injection.
 - **Task ids are UUIDs**, so they are not guessable or enumerable.
+- **Attachments never pass through the API.** `POST .../attachments` only creates a database row (status `pending`) and returns a signed Cloud Storage URL; the client uploads directly to Cloud Storage, and `confirm` is what turns the row into `uploaded`, after checking the real object size. This keeps large file bytes off the Cloud Run instance entirely — it only ever issues and validates URLs. A `pending` row whose upload never gets confirmed (abandoned upload, crashed client) is cleaned up daily by `taskapi-cleanup-attachments`, which also removes the underlying object if one was partially uploaded.
+- **Signing without a private key.** Cloud Run's service account credentials have no private key to sign with locally (consistent with the keyless setup used everywhere else in this project), so `app/storage.py` routes signing through the IAM Credentials API's `signBlob`, authenticated as the service account itself. This needs one extra IAM grant beyond normal Storage access: `roles/iam.serviceAccountTokenCreator` on the service account, for itself. The same code path works unchanged locally, where it works by impersonating that service account via your own `gcloud auth application-default login` identity.
 - **Rate limiting is behind a `RateLimiter` interface** (`app/rate_limiting/base.py`) with a single `hit(key, limit, window_seconds)` method. The only implementation today is PostgreSQL-backed, using an atomic `INSERT ... ON CONFLICT DO UPDATE count = count + 1` fixed-window counter, which stays correct under concurrent requests across multiple Cloud Run instances without needing a lock or a read-then-write round trip. Redis would be the conventional choice for this, but it requires an always-on Memorystore instance (no free tier, no scale-to-zero) plus a Serverless VPC Access connector for Cloud Run to reach it — not worth the cost and complexity at this project's scale when Postgres, which is already there, does the job correctly. The interface means swapping in a Redis-backed implementation later touches one dependency provider, not the endpoints. Login is protected by two independent limits: per-IP (stops one IP hammering many accounts) and per-account (stops one account being hammered from many IPs, e.g. a botnet); the account-scoped key is the submitted email as-is, so the check never has to look up whether the account exists.
 
 ## Deployment
@@ -202,19 +232,20 @@ flowchart LR
     CI --> Merge["Merge to main"]
     Merge --> Build["Build and push image"]
     Build --> Migrate["Cloud Run Job: alembic upgrade head"]
-    Migrate --> Cleanup["Update taskapi-cleanup-tokens image"]
+    Migrate --> Cleanup["Update cleanup job images"]
     Cleanup --> Deploy["Deploy new revision"]
     Deploy --> Smoke["Smoke test: GET /health"]
-    Scheduler["Cloud Scheduler, daily"] -.-> Cleanup2["taskapi-cleanup-tokens runs"]
+    Scheduler["Cloud Scheduler, daily"] -.-> CleanupTokens["taskapi-cleanup-tokens runs"]
+    Scheduler -.-> CleanupAttachments["taskapi-cleanup-attachments runs"]
 ```
 
 **Runtime.** The API runs on Cloud Run and connects to Cloud SQL (PostgreSQL) through the Cloud SQL unix socket, with no public database access. `SECRET_KEY` and `DATABASE_URL` come from Secret Manager. The container runs as a non-root user and the image contains no secrets.
 
 **On every pull request**, the workflow runs `ruff check`, `ruff format --check`, the test suite on a PostgreSQL service container, and applies all migrations to an empty database followed by `alembic check`. The tests create the schema with `create_all` for speed, so this last step is what verifies the migrations themselves.
 
-**On every merge to `main`**, if the checks pass, the workflow builds the image (tagged with the commit SHA), runs the migrations as a Cloud Run Job, points the `taskapi-cleanup-tokens` job at the same new image, deploys the new revision and calls `/health`. Migrations run before the deploy, so a failed migration leaves the previous version serving traffic. Deployments are serialized with a `concurrency` group.
+**On every merge to `main`**, if the checks pass, the workflow builds the image (tagged with the commit SHA), runs the migrations as a Cloud Run Job, points both cleanup jobs at the same new image, deploys the new revision and calls `/health`. Migrations run before the deploy, so a failed migration leaves the previous version serving traffic. Deployments are serialized with a `concurrency` group.
 
-**Scheduled maintenance.** `taskapi-cleanup-tokens` is a second Cloud Run Job, built from the same image as the service but run with `python -m app.cli` instead of `uvicorn`. A Cloud Scheduler trigger invokes it once a day to delete expired and long-revoked refresh tokens. It is kept up to date by the deploy pipeline above rather than by its own build step.
+**Scheduled maintenance.** `taskapi-cleanup-tokens` and `taskapi-cleanup-attachments` are Cloud Run Jobs built from the same image as the service, run with `python -m app.cli <command>` instead of `uvicorn`. Cloud Scheduler triggers invoke them once a day — the former deletes expired and long-revoked refresh tokens, the latter deletes attachment rows (and any partially-uploaded object) whose upload was never confirmed. Both are kept up to date by the deploy pipeline above rather than by their own build step.
 
 **Least privilege.** Two service accounts with separate roles:
 
@@ -282,12 +313,23 @@ gcloud artifacts repositories create taskapi --repository-format=docker --locati
 gcloud artifacts repositories set-cleanup-policies taskapi \
   --location=$REGION --policy=infra/cleanup-policy.json --no-dry-run
 
+# Attachments: private bucket, plus the signing grant that lets the service
+# account sign URLs via the IAM Credentials API (it has no private key)
+gcloud storage buckets create gs://${PROJECT_ID}-attachments \
+  --location=$REGION --uniform-bucket-level-access --public-access-prevention
+gcloud storage buckets add-iam-policy-binding gs://${PROJECT_ID}-attachments \
+  --member="serviceAccount:$SA" --role="roles/storage.objectAdmin"
+gcloud iam service-accounts add-iam-policy-binding $SA \
+  --member="serviceAccount:$SA" --role="roles/iam.serviceAccountTokenCreator"
+gcloud services enable iamcredentials.googleapis.com
+
 # First deployment. It stores the service configuration (service account,
 # secrets, Cloud SQL, env vars); the pipeline later only changes the image.
 gcloud run deploy taskapi --source . --region $REGION \
   --service-account $SA --add-cloudsql-instances $CONN \
   --set-secrets SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest \
-  --set-env-vars LOG_JSON=true --max-instances 2 --allow-unauthenticated
+  --set-env-vars LOG_JSON=true,GCS_BUCKET_NAME=${PROJECT_ID}-attachments,GCS_SIGNER_SERVICE_ACCOUNT=$SA \
+  --max-instances 2 --allow-unauthenticated
 
 # Migration job (same image as the service)
 IMAGE=$(gcloud run services describe taskapi --region $REGION \
@@ -298,23 +340,36 @@ gcloud run jobs create taskapi-migrate --image $IMAGE --region $REGION \
   --command alembic --args upgrade,head
 gcloud run jobs execute taskapi-migrate --region $REGION --wait
 
-# Refresh token cleanup job (same image, runs the CLI instead of the server)
+# Cleanup jobs (same image, run the CLI instead of the server). cli.py takes
+# the command to run as its argument.
 gcloud run jobs create taskapi-cleanup-tokens --image=$IMAGE --region=$REGION \
   --service-account=$SA --set-cloudsql-instances=$CONN \
   --set-secrets=SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest \
   --set-env-vars=LOG_JSON=true \
-  --command=python,-m,app.cli --max-retries=1 --task-timeout=300
+  --command=python,-m,app.cli,cleanup-refresh-tokens --max-retries=1 --task-timeout=300
 
-# Cloud Scheduler: run the cleanup job once a day
+gcloud run jobs create taskapi-cleanup-attachments --image=$IMAGE --region=$REGION \
+  --service-account=$SA --set-cloudsql-instances=$CONN \
+  --set-secrets=SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest \
+  --set-env-vars=LOG_JSON=true,GCS_BUCKET_NAME=${PROJECT_ID}-attachments,GCS_SIGNER_SERVICE_ACCOUNT=$SA \
+  --command=python,-m,app.cli,cleanup-stale-attachments --max-retries=1 --task-timeout=300
+
+# Cloud Scheduler: run both cleanup jobs once a day
 gcloud services enable cloudscheduler.googleapis.com
 gcloud iam service-accounts create taskapi-scheduler \
   --display-name="Cloud Scheduler for taskapi jobs"
 SCHEDULER_SA=taskapi-scheduler@${PROJECT_ID}.iam.gserviceaccount.com
-gcloud run jobs add-iam-policy-binding taskapi-cleanup-tokens --region=$REGION \
-  --member="serviceAccount:$SCHEDULER_SA" --role="roles/run.invoker"
+for job in taskapi-cleanup-tokens taskapi-cleanup-attachments; do
+  gcloud run jobs add-iam-policy-binding $job --region=$REGION \
+    --member="serviceAccount:$SCHEDULER_SA" --role="roles/run.invoker"
+done
 gcloud scheduler jobs create http taskapi-cleanup-tokens-schedule \
   --location=$REGION --schedule="0 4 * * *" \
   --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/taskapi-cleanup-tokens:run" \
+  --http-method=POST --oauth-service-account-email=$SCHEDULER_SA
+gcloud scheduler jobs create http taskapi-cleanup-attachments-schedule \
+  --location=$REGION --schedule="0 5 * * *" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/taskapi-cleanup-attachments:run" \
   --http-method=POST --oauth-service-account-email=$SCHEDULER_SA
 
 # Deployer service account for GitHub Actions
@@ -360,7 +415,6 @@ While the database is stopped, endpoints that need it return `500`; `/health` ke
 
 - User roles / permission levels
 - Background jobs (Cloud Tasks or Pub/Sub), for example notifications when a task is completed
-- File attachments in Cloud Storage with signed URLs
 - Alerts on 5xx errors in Cloud Monitoring
 
 ## License
