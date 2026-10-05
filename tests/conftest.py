@@ -73,3 +73,31 @@ def login_as(client):
         return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
     return _login
+
+
+@pytest.fixture
+def fake_storage(monkeypatch):
+    """Replaces app.storage's GCS calls with in-memory fakes, so attachment
+    tests don't hit real Google Cloud Storage. Returns the in-memory dict
+    of uploaded blobs (path -> size in bytes) so tests can simulate an
+    upload having happened."""
+    uploaded_blobs: dict[str, int] = {}
+
+    def fake_generate_upload_url(storage_path, content_type, expires_minutes):
+        return f"https://fake-upload-url/{storage_path}"
+
+    def fake_generate_download_url(storage_path, expires_minutes):
+        return f"https://fake-download-url/{storage_path}"
+
+    def fake_get_blob_size(storage_path):
+        return uploaded_blobs.get(storage_path)
+
+    def fake_delete_object(storage_path):
+        uploaded_blobs.pop(storage_path, None)
+
+    monkeypatch.setattr("app.services.attachment.generate_upload_url", fake_generate_upload_url)
+    monkeypatch.setattr("app.services.attachment.generate_download_url", fake_generate_download_url)
+    monkeypatch.setattr("app.services.attachment.get_blob_size", fake_get_blob_size)
+    monkeypatch.setattr("app.services.attachment.delete_object", fake_delete_object)
+
+    return uploaded_blobs
