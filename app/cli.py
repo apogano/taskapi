@@ -23,6 +23,7 @@ def cleanup_refresh_tokens() -> None:
     finally:
         db.close()
 
+
 def cleanup_stale_attachments() -> None:
     db = SessionLocal()
     try:
@@ -30,6 +31,7 @@ def cleanup_stale_attachments() -> None:
         service.cleanup_stale_pending()
     finally:
         db.close()
+
 
 COMMANDS = {
     "cleanup-refresh-tokens": cleanup_refresh_tokens,
@@ -41,7 +43,10 @@ if __name__ == "__main__":
 
     if len(sys.argv) != 2 or sys.argv[1] not in COMMANDS:
         available = ", ".join(COMMANDS)
-        print(f"Usage: python -m app.cli <command>\nAvailable: {available}", file=sys.stderr)
+        print(
+            f"Usage: python -m app.cli <command>\nAvailable: {available}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     COMMANDS[sys.argv[1]]()

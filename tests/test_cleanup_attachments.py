@@ -72,7 +72,9 @@ def test_cleanup_keeps_uploaded_attachments_even_if_old(client, db, fake_storage
 
     storage_path = f"tasks/{task['id']}/{attachment['id']}/test.txt"
     fake_storage[storage_path] = 100
-    client.post(f"/tasks/{task['id']}/attachments/{attachment['id']}/confirm", headers=headers)
+    client.post(
+        f"/tasks/{task['id']}/attachments/{attachment['id']}/confirm", headers=headers
+    )
 
     row = db.query(Attachment).filter(Attachment.id == attachment["id"]).first()
     row.created_at = datetime.now(UTC) - timedelta(hours=48)

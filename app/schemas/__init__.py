@@ -19,5 +19,5 @@ __all__ = [
     "AttachmentRead",
     "AttachmentCreate",
     "DownloadUrlResponse",
-    "UploadUrlResponse"
+    "UploadUrlResponse",
 ]

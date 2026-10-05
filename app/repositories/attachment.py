@@ -8,23 +8,22 @@ from app.models import Attachment
 
 
 class AttachmentRepository:
-    def __init__(self, db:Session):
+    def __init__(self, db: Session):
         self.db = db
 
-    def get(self,task_id: UUID, attachment_id: UUID) -> Attachment| None:
+    def get(self, task_id: UUID, attachment_id: UUID) -> Attachment | None:
         return self.db.scalar(
             select(Attachment).where(
-                Attachment.id == attachment_id,
-                Attachment.task_id == task_id
+                Attachment.id == attachment_id, Attachment.task_id == task_id
             )
         )
 
-    def add(self, attachment: Attachment)->Attachment:
+    def add(self, attachment: Attachment) -> Attachment:
         self.db.add(attachment)
         self.db.flush()
         return attachment
 
-    def delete(self,attachment: Attachment) -> None:
+    def delete(self, attachment: Attachment) -> None:
         self.db.delete(attachment)
 
     def find_stale_pending(self, older_than_hours: int = 24) -> list[Attachment]:

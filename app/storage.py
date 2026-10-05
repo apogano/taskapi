@@ -7,14 +7,16 @@ from google.cloud.exceptions import NotFound
 
 from app.config import settings
 
-_client : storage.Client | None = None
+_client: storage.Client | None = None
 _signing_credentials = None
 
-def _get_client()-> storage.Client:
+
+def _get_client() -> storage.Client:
     global _client
     if _client is None:
         _client = storage.Client()
     return _client
+
 
 def _get_signing_kwargs() -> dict:
     """Credentials used locally lack a private key (they're just an access
@@ -34,13 +36,16 @@ def _get_signing_kwargs() -> dict:
         "access_token": _signing_credentials.token,
     }
 
+
 def get_blob_size(storage_path: str) -> int | None:
     bucket = _get_client().bucket(settings.gcs_bucket_name)
     blob = bucket.get_blob(storage_path)  # None if it doesn't exist
     return blob.size if blob is not None else None
 
 
-def generate_upload_url(storage_path: str, content_type: str, expires_minutes: int)-> str:
+def generate_upload_url(
+    storage_path: str, content_type: str, expires_minutes: int
+) -> str:
     bucket = _get_client().bucket(settings.gcs_bucket_name)
     blob = bucket.blob(storage_path)
     return blob.generate_signed_url(
@@ -51,6 +56,7 @@ def generate_upload_url(storage_path: str, content_type: str, expires_minutes: i
         **_get_signing_kwargs(),
     )
 
+
 def generate_download_url(storage_path: str, expires_minutes: int) -> str:
     bucket = _get_client().bucket(settings.gcs_bucket_name)
     blob = bucket.blob(storage_path)
@@ -60,6 +66,7 @@ def generate_download_url(storage_path: str, expires_minutes: int) -> str:
         method="GET",
         **_get_signing_kwargs(),
     )
+
 
 def delete_object(storage_path: str) -> None:
     bucket = _get_client().bucket(settings.gcs_bucket_name)

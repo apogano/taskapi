@@ -95,8 +95,12 @@ def fake_storage(monkeypatch):
     def fake_delete_object(storage_path):
         uploaded_blobs.pop(storage_path, None)
 
-    monkeypatch.setattr("app.services.attachment.generate_upload_url", fake_generate_upload_url)
-    monkeypatch.setattr("app.services.attachment.generate_download_url", fake_generate_download_url)
+    monkeypatch.setattr(
+        "app.services.attachment.generate_upload_url", fake_generate_upload_url
+    )
+    monkeypatch.setattr(
+        "app.services.attachment.generate_download_url", fake_generate_download_url
+    )
     monkeypatch.setattr("app.services.attachment.get_blob_size", fake_get_blob_size)
     monkeypatch.setattr("app.services.attachment.delete_object", fake_delete_object)
 

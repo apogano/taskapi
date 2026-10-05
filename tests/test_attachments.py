@@ -11,10 +11,14 @@ def auth_headers(client):
 
 
 def create_task(client, headers):
-    return client.post("/tasks", json={"title": "Task with attachment"}, headers=headers).json()
+    return client.post(
+        "/tasks", json={"title": "Task with attachment"}, headers=headers
+    ).json()
 
 
-def create_attachment(client, headers, task_id, filename="test.txt", content_type="text/plain"):
+def create_attachment(
+    client, headers, task_id, filename="test.txt", content_type="text/plain"
+):
     return client.post(
         f"/tasks/{task_id}/attachments",
         json={"filename": filename, "content_type": content_type},
@@ -37,7 +41,9 @@ def test_create_attachment_returns_pending_status_and_upload_url(client, fake_st
 
 def test_create_attachment_on_missing_task_returns_404(client, fake_storage):
     headers = auth_headers(client)
-    response = create_attachment(client, headers, "00000000-0000-0000-0000-000000000000")
+    response = create_attachment(
+        client, headers, "00000000-0000-0000-0000-000000000000"
+    )
     assert response.status_code == 404
 
 
@@ -46,7 +52,9 @@ def test_create_attachment_on_other_users_task_returns_404(client, fake_storage)
     task = create_task(client, headers)
 
     bob_headers = {}
-    client.post("/auth/register", json={"email": "bob@example.com", "password": PASSWORD})
+    client.post(
+        "/auth/register", json={"email": "bob@example.com", "password": PASSWORD}
+    )
     bob_tokens = client.post(
         "/auth/login", data={"username": "bob@example.com", "password": PASSWORD}
     ).json()
@@ -122,7 +130,8 @@ def test_confirm_rejects_file_over_size_limit_deletes_db_row_too(client, fake_st
 
     # The record is gone, not just the storage object
     download_response = client.get(
-        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url", headers=headers
+        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url",
+        headers=headers,
     )
     assert download_response.status_code == 404
 
@@ -133,7 +142,8 @@ def test_download_url_before_confirm_returns_409(client, fake_storage):
     attachment = create_attachment(client, headers, task["id"]).json()["attachment"]
 
     response = client.get(
-        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url", headers=headers
+        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url",
+        headers=headers,
     )
 
     assert response.status_code == 409
@@ -146,10 +156,13 @@ def test_download_url_after_confirm_returns_url(client, fake_storage):
 
     storage_path = f"tasks/{task['id']}/{attachment['id']}/test.txt"
     fake_storage[storage_path] = 100
-    client.post(f"/tasks/{task['id']}/attachments/{attachment['id']}/confirm", headers=headers)
+    client.post(
+        f"/tasks/{task['id']}/attachments/{attachment['id']}/confirm", headers=headers
+    )
 
     response = client.get(
-        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url", headers=headers
+        f"/tasks/{task['id']}/attachments/{attachment['id']}/download-url",
+        headers=headers,
     )
 
     assert response.status_code == 200

@@ -50,4 +50,6 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AttachmentTooLargeError)
     async def attachment_too_large(request: Request, exc: AttachmentTooLargeError):
-        return JSONResponse(status_code=413, content={"detail": "Attachment exceeds size limit"})
+        return JSONResponse(
+            status_code=413, content={"detail": "Attachment exceeds size limit"}
+        )

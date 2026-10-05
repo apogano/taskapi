@@ -11,14 +11,17 @@ from app.services.attachment import AttachmentService
 
 DbSession = Annotated[Session, Depends(get_db)]
 
+
 def get_attachment_repository(db: DbSession) -> AttachmentRepository:
     return AttachmentRepository(db)
 
-def get_attachment_service(
-        db: DbSession,
-        repo: Annotated[AttachmentRepository, Depends(get_attachment_repository)],
-        task_repo: Annotated[TaskRepository, Depends(get_task_repository)]
-    ) -> AttachmentService:
-        return AttachmentService(db,repo,task_repo)
 
-AttachmentServiceDep = Annotated[AttachmentService,Depends(get_attachment_service)]
+def get_attachment_service(
+    db: DbSession,
+    repo: Annotated[AttachmentRepository, Depends(get_attachment_repository)],
+    task_repo: Annotated[TaskRepository, Depends(get_task_repository)],
+) -> AttachmentService:
+    return AttachmentService(db, repo, task_repo)
+
+
+AttachmentServiceDep = Annotated[AttachmentService, Depends(get_attachment_service)]
