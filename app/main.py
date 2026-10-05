@@ -4,7 +4,7 @@ from app.config import settings
 from app.errors import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import request_context_middleware
-from app.routers import auth, tasks, users
+from app.routers import attachments, auth, tasks, users
 
 setup_logging()
 
@@ -23,6 +23,7 @@ register_exception_handlers(app)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(tasks.router)
+app.include_router(attachments.router)
 
 
 @app.get("/health", tags=["health"])

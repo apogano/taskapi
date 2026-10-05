@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     rate_limit_refresh_window_seconds: int = 900
     rate_limit_login_account_attempts: int = 10
     rate_limit_login_account_window_seconds: int = 900  # 15 minutes
+    gcs_bucket_name: str = ""
+    gcs_signer_service_account: str = ""
+    attachment_upload_url_expire_minutes: int = 15
+    attachment_download_url_expire_minutes: int = 15
+    attachment_max_size_mb: int = 25
 
     model_config = SettingsConfigDict(env_file=".env")
 
