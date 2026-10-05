@@ -1,3 +1,9 @@
+from app.schemas.attachment import (
+    AttachmentCreate,
+    AttachmentRead,
+    DownloadUrlResponse,
+    UploadUrlResponse,
+)
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
 from app.schemas.user import RefreshRequest, Token, TokenPair, UserCreate, UserRead
 
@@ -10,4 +16,8 @@ __all__ = [
     "UserRead",
     "TokenPair",
     "RefreshRequest",
+    "AttachmentRead",
+    "AttachmentCreate",
+    "DownloadUrlResponse",
+    "UploadUrlResponse"
 ]
