@@ -99,6 +99,7 @@ jobs:
       - name: Update token cleanup job
         run: |
           gcloud run jobs update taskapi-cleanup-tokens --image "$IMAGE" --region "$REGION"
+          gcloud run jobs update taskapi-cleanup-attachments --image "$IMAGE" --region "$REGION"
 
       - name: Deploy
         run: gcloud run deploy taskapi --image "$IMAGE" --region "$REGION"
