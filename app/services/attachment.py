@@ -123,3 +123,16 @@ class AttachmentService:
         self.repo.delete(attachment)
         self.db.commit()
         logger.info("Attachment deleted id=%s task=%s",attachment_id,task_id)
+
+    def cleanup_stale_pending(self, older_than_hours: int = 24) -> int:
+        stale = self.repo.find_stale_pending(older_than_hours)
+        for attachment in stale:
+            # Best-effort: the object may never have been uploaded at all.
+            delete_object(attachment.storage_path)
+            self.repo.delete(attachment)
+
+        if stale:
+            self.db.commit()
+
+        logger.info("Attachment cleanup: deleted %d stale pending rows", len(stale))
+        return len(stale)

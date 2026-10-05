@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, UTC
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,3 +26,11 @@ class AttachmentRepository:
 
     def delete(self,attachment: Attachment) -> None:
         self.db.delete(attachment)
+
+    def find_stale_pending(self, older_than_hours: int = 24) -> list[Attachment]:
+        cutoff = datetime.now(UTC) - timedelta(hours=older_than_hours)
+        return list(
+            self.db.query(Attachment)
+            .filter(Attachment.status == "pending", Attachment.created_at < cutoff)
+            .all()
+        )
