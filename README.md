@@ -43,10 +43,11 @@ I built it as a hands-on project to learn production-style backend development: 
 | `POST` | `/auth/logout` | Revoke a refresh token | no (refresh token in body) |
 | `GET` | `/users/me` | Current user | yes |
 | `POST` | `/tasks` | Create a task | yes |
-| `GET` | `/tasks` | List own tasks. Query: `done`, `limit` (1-100, default 50), `offset` | yes |
+| `GET` | `/tasks` | List own tasks, paginated. Query: `done`, `limit` (1-100, default 50), `offset` | yes |
 | `GET` | `/tasks/{id}` | Get one task | yes |
 | `PATCH` | `/tasks/{id}` | Partial update | yes |
 | `DELETE` | `/tasks/{id}` | Delete a task | yes |
+| `GET` | `/tasks/{id}/attachments` | List a task's uploaded attachments, paginated | yes |
 | `POST` | `/tasks/{id}/attachments` | Create a pending attachment, returns a signed upload URL | yes |
 | `POST` | `/tasks/{id}/attachments/{attachment_id}/confirm` | Confirm an upload finished; validates the file size | yes |
 | `GET` | `/tasks/{id}/attachments/{attachment_id}/download-url` | Get a signed download URL (only once uploaded) | yes |
@@ -58,6 +59,14 @@ I built it as a hands-on project to learn production-style backend development: 
 Attachments are a three-step flow: `POST .../attachments` creates the record and returns a signed URL; the client `PUT`s the file straight to that URL (never through this API); then `POST .../confirm` checks the uploaded file's real size against `ATTACHMENT_MAX_SIZE_MB` and marks it ready. `download-url` and `DELETE` work the same way — the client talks to Cloud Storage directly using the URL the API hands it.
 
 `/auth/register`, `/auth/login` and `/auth/refresh` are rate limited and return `429` with a `Retry-After` header once the limit is exceeded.
+
+List endpoints return a page envelope rather than a bare array, so a client can tell how much more there is to fetch:
+
+```json
+{ "items": [...], "total": 142, "limit": 50, "offset": 0 }
+```
+
+`total` is the count of everything matching the current filters, not the size of the page.
 
 Interactive docs are available at `/docs` when `ENABLE_DOCS=true`. They are disabled by default, so they are off in production.
 
@@ -76,6 +85,7 @@ curl -X POST localhost:8000/tasks \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
   -d '{"title":"Write the README"}'
 
+# Returns {"items": [...], "total": N, "limit": 10, "offset": 0}
 curl "localhost:8000/tasks?done=false&limit=10" -H "Authorization: Bearer $ACCESS_TOKEN"
 
 # The access token expires quickly; get a new pair without logging in again.
@@ -220,7 +230,7 @@ infra/cleanup-policy.json   # Artifact Registry cleanup policy
 - **Refresh token rotation.** Refresh tokens are random values, stored in the database only as a SHA-256 hash (never as plain text, unlike the JWT access token which is never persisted at all). Each successful `/auth/refresh` call revokes the token just used and issues a new one in its place, so a refresh token works exactly once. Every token belongs to a `family_id` created at login. If a token that has already been rotated is presented again — the signature of a stolen, replayed token — the entire family is revoked, logging that user out on every device until they log in again. A separate `taskapi-cleanup-tokens` Cloud Run Job, triggered daily by Cloud Scheduler, deletes expired and long-revoked rows so the table doesn't grow unbounded; revoked rows are kept for a short grace period before deletion in case they are needed to investigate an incident.
 - **Logging.** One structured log line per request (method, path, status, duration), never bodies, query strings, passwords or tokens. The `X-Request-ID` header is accepted only if it is short and alphanumeric, to prevent log injection.
 - **Task ids are UUIDs**, so they are not guessable or enumerable.
-- **Attachments never pass through the API.** `POST .../attachments` only creates a database row (status `pending`) and returns a signed Cloud Storage URL; the client uploads directly to Cloud Storage, and `confirm` is what turns the row into `uploaded`, after checking the real object size. This keeps large file bytes off the Cloud Run instance entirely — it only ever issues and validates URLs. A `pending` row whose upload never gets confirmed (abandoned upload, crashed client) is cleaned up daily by `taskapi-cleanup-attachments`, which also removes the underlying object if one was partially uploaded.
+- **Attachments never pass through the API.** `POST .../attachments` only creates a database row (status `pending`) and returns a signed Cloud Storage URL; the client uploads directly to Cloud Storage, and `confirm` is what turns the row into `uploaded`, after checking the real object size. This keeps large file bytes off the Cloud Run instance entirely — it only ever issues and validates URLs. A `pending` row whose upload never gets confirmed (abandoned upload, crashed client) is cleaned up daily by `taskapi-cleanup-attachments`, which also removes the underlying object if one was partially uploaded. Listing a task's attachments returns only confirmed ones — `pending` is internal bookkeeping, not something a client should have to reason about.
 - **Signing without a private key.** Cloud Run's service account credentials have no private key to sign with locally (consistent with the keyless setup used everywhere else in this project), so `app/storage.py` routes signing through the IAM Credentials API's `signBlob`, authenticated as the service account itself. This needs one extra IAM grant beyond normal Storage access: `roles/iam.serviceAccountTokenCreator` on the service account, for itself. The same code path works unchanged locally, where it works by impersonating that service account via your own `gcloud auth application-default login` identity.
 - **Rate limiting is behind a `RateLimiter` interface** (`app/rate_limiting/base.py`) with a single `hit(key, limit, window_seconds)` method. The only implementation today is PostgreSQL-backed, using an atomic `INSERT ... ON CONFLICT DO UPDATE count = count + 1` fixed-window counter, which stays correct under concurrent requests across multiple Cloud Run instances without needing a lock or a read-then-write round trip. Redis would be the conventional choice for this, but it requires an always-on Memorystore instance (no free tier, no scale-to-zero) plus a Serverless VPC Access connector for Cloud Run to reach it — not worth the cost and complexity at this project's scale when Postgres, which is already there, does the job correctly. The interface means swapping in a Redis-backed implementation later touches one dependency provider, not the endpoints. Login is protected by two independent limits: per-IP (stops one IP hammering many accounts) and per-account (stops one account being hammered from many IPs, e.g. a botnet); the account-scoped key is the submitted email as-is, so the check never has to look up whether the account exists.
 
