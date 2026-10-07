@@ -1,0 +1,31 @@
+displayName: "Task API — elevated 5xx rate"
+documentation:
+  content: |
+    The taskapi Cloud Run service is returning server errors.
+    Check logs with:
+      gcloud logging read 'resource.type="cloud_run_revision"
+        AND resource.labels.service_name="taskapi" AND severity>=ERROR' --limit 20
+    Each error log line carries a request_id matching the X-Request-ID
+    response header, so a user-reported failure can be traced directly.
+  mimeType: "text/markdown"
+conditions:
+  - displayName: "5xx responses in the last 5 minutes"
+    conditionThreshold:
+      filter: >-
+        resource.type="cloud_run_revision"
+        AND resource.labels.service_name="taskapi"
+        AND metric.type="run.googleapis.com/request_count"
+        AND metric.labels.response_code_class="5xx"
+      aggregations:
+        - alignmentPeriod: "300s"
+          perSeriesAligner: ALIGN_SUM
+          crossSeriesReducer: REDUCE_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 3
+      duration: "0s"
+      trigger:
+        count: 1
+combiner: OR
+alertStrategy:
+  autoClose: "3600s"
+enabled: true
