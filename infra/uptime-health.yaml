@@ -1,0 +1,22 @@
+# Uptime check on /health, created via the Cloud Console.
+# Exported with: gcloud monitoring uptime list-configs --format=yaml
+# Kept here as documentation of what exists in GCP, not as an importable config.
+---
+checkerType: STATIC_IP_CHECKERS
+displayName: Uptime Failure
+httpCheck:
+  acceptedResponseStatusCodes:
+  - statusClass: STATUS_CLASS_2XX
+  path: /health
+  port: 443
+  requestMethod: GET
+  useSsl: true
+  validateSsl: true
+logCheckFailures: true
+monitoredResource:
+  labels:
+    host: taskapi-kvng3vjgcq-ew.a.run.app
+    project_id: taskapi-509213
+  type: uptime_url
+period: 300s
+timeout: 10s

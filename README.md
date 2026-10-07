@@ -21,6 +21,7 @@ I built it as a hands-on project to learn production-style backend development: 
 - Rate limiting on `/auth/register`, `/auth/login` and `/auth/refresh`, enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
 - File attachments on tasks, stored in Cloud Storage: the API never handles file bytes, it only issues short-lived signed URLs for the client to upload to and download from directly
 - A second scheduled Cloud Run Job clears attachments that were never confirmed after upload
+- Alerting on elevated 5xx rates and on the service being unreachable, with the alert email linking back to the logs via the request ID
 
 ## Tech stack
 
@@ -30,7 +31,8 @@ I built it as a hands-on project to learn production-style backend development: 
 | Database | PostgreSQL 16, SQLAlchemy 2.0, Alembic, psycopg 3 |
 | Auth | PyJWT, pwdlib (argon2) |
 | Tooling | uv, pytest, ruff |
-| Runtime | Docker, Google Cloud Run, Cloud SQL, Secret Manager, Artifact Registry |
+| Runtime | Docker, Google Cloud Run, Cloud SQL, Cloud Storage, Secret Manager, Artifact Registry |
+| Operations | Cloud Scheduler, Cloud Monitoring, Cloud Logging |
 | CI/CD | GitHub Actions, Workload Identity Federation |
 
 ## API overview
@@ -268,6 +270,21 @@ GitHub authenticates through **Workload Identity Federation**, so no service acc
 
 **Cleanup.** Artifact Registry keeps the 5 most recent images and deletes older ones after 30 days (`infra/cleanup-policy.json`). The 5 kept images cover rollbacks.
 
+### Monitoring
+
+Two alerts, both notifying by email:
+
+| Alert | Catches | Config |
+|---|---|---|
+| Elevated 5xx rate | More than 3 server errors in 5 minutes | `infra/alert-5xx.yaml` |
+| Uptime failure | `/health` unreachable, checked every 5 minutes from Europe | `infra/uptime-health.yaml` |
+
+They cover different failures on purpose. The 5xx alert reads Cloud Run's own `request_count` metric rather than the application's logs, so it still fires when a container crashes or times out before it can log anything. But a service that is fully down serves no requests at all, so that metric goes quiet rather than spiking — which is what the uptime check is for.
+
+The alert email includes the exact `gcloud logging read` command to run, and every error log line carries the `request_id` that was also returned in the response's `X-Request-ID` header, so a failure a user reports can be traced straight to its stack trace.
+
+The uptime check was created in the Cloud Console; the YAML in `infra/` is an export of what exists, kept as documentation rather than as an importable config. The 5-minute interval is deliberate: checking more often would keep an instance permanently warm and defeat Cloud Run's scale-to-zero.
+
 ### Rollback
 
 ```bash
@@ -406,6 +423,25 @@ gcloud iam service-accounts add-iam-policy-binding $DEPLOY_SA \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/${GITHUB_REPO}"
 ```
 
+Monitoring, once the service is up:
+
+```bash
+gcloud services enable monitoring.googleapis.com logging.googleapis.com
+
+# Email notification channel (or create it under Monitoring > Alerting in the Console)
+gcloud beta monitoring channels create --display-name="Alerts" \
+  --type=email --channel-labels=email_address=you@example.com
+CHANNEL=$(gcloud beta monitoring channels list --format='value(name)' --limit=1)
+
+# 5xx alert. Edit the service name in the file first if yours differs.
+gcloud alpha monitoring policies create \
+  --policy-from-file=infra/alert-5xx.yaml --notification-channels=$CHANNEL
+```
+
+The uptime check is easiest to create in the Console: **Monitoring → Uptime checks → Create**, protocol HTTPS, the service hostname, path `/health`, every 5 minutes, and pick the notification channel in the *Alert & notification* step so the alert policy is created with it. `infra/uptime-health.yaml` shows the resulting configuration.
+
+Verify the whole chain actually reaches your inbox, rather than assuming it does — stopping the database briefly and hitting an endpoint that needs it is enough to trigger the 5xx alert.
+
 Then update the project-specific values in `.github/workflows/ci.yml`: the `workload_identity_provider`, the `service_account` and the `IMAGE` path.
 
 </details>
@@ -423,9 +459,9 @@ While the database is stopped, endpoints that need it return `500`; `/health` ke
 
 ## Possible next steps
 
-- User roles / permission levels
 - Background jobs (Cloud Tasks or Pub/Sub), for example notifications when a task is completed
-- Alerts on 5xx errors in Cloud Monitoring
+- Cursor-based pagination, which avoids the duplicate/skipped rows that offset pagination can produce when the data changes between pages
+- User roles, once there is a use case that needs them
 
 ## License
 
