@@ -1,6 +1,7 @@
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app import schemas
 from app.dependencies.attachment import AttachmentServiceDep
@@ -22,6 +23,20 @@ def create_attachment(
     return schemas.UploadUrlResponse(
         attachment=schemas.AttachmentRead.model_validate(attachment),
         upload_url=upload_url,
+    )
+
+
+@router.get("", response_model=schemas.Page[schemas.AttachmentRead])
+def list_attachments(
+    task_id: UUID,
+    user: CurrentUser,
+    service: AttachmentServiceDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    items, total = service.list(user.id, task_id, limit=limit, offset=offset)
+    return schemas.Page[schemas.AttachmentRead](
+        items=items, total=total, limit=limit, offset=offset
     )
 
 

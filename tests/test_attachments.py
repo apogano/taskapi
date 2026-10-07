@@ -204,3 +204,51 @@ def test_task_deletion_cascades_to_attachments(client, db, fake_storage):
     # never called the attachment delete endpoint
     remaining = db.query(Attachment).filter(Attachment.id == attachment["id"]).first()
     assert remaining is None
+
+
+def test_list_attachments_returns_only_uploaded(client, fake_storage):
+    headers = auth_headers(client)
+    task = create_task(client, headers)
+
+    # One confirmed upload
+    uploaded = create_attachment(client, headers, task["id"]).json()["attachment"]
+    storage_path = f"tasks/{task['id']}/{uploaded['id']}/test.txt"
+    fake_storage[storage_path] = 100
+    client.post(
+        f"/tasks/{task['id']}/attachments/{uploaded['id']}/confirm", headers=headers
+    )
+
+    # One that was never confirmed
+    create_attachment(client, headers, task["id"])
+
+    response = client.get(f"/tasks/{task['id']}/attachments", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [a["id"] for a in body["items"]] == [uploaded["id"]]
+    # total must exclude pending too, not just the listed items
+    assert body["total"] == 1
+
+
+def test_list_attachments_on_other_users_task_returns_404(client, fake_storage):
+    headers = auth_headers(client)
+    task = create_task(client, headers)
+
+    client.post(
+        "/auth/register", json={"email": "bob@example.com", "password": PASSWORD}
+    )
+    bob_tokens = client.post(
+        "/auth/login", data={"username": "bob@example.com", "password": PASSWORD}
+    ).json()
+    bob_headers = {"Authorization": f"Bearer {bob_tokens['access_token']}"}
+
+    response = client.get(f"/tasks/{task['id']}/attachments", headers=bob_headers)
+    assert response.status_code == 404
+
+
+def test_list_attachments_requires_auth(client, fake_storage):
+    headers = auth_headers(client)
+    task = create_task(client, headers)
+
+    response = client.get(f"/tasks/{task['id']}/attachments")
+    assert response.status_code == 401

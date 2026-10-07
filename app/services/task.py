@@ -41,8 +41,10 @@ class TaskService:
         done: bool | None = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[Task]:
-        return self.repo.list(owner_id, done=done, limit=limit, offset=offset)
+    ) -> tuple[list[Task], int]:
+        items = self.repo.list(owner_id, done=done, limit=limit, offset=offset)
+        total = self.repo.count(owner_id, done=done)
+        return items, total
 
     def update(self, owner_id: UUID, task_id: UUID, payload: TaskUpdate) -> Task:
         task = self.get(owner_id, task_id)
