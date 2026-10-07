@@ -101,7 +101,7 @@ def test_list_filters_by_done(client):
     client.patch(f"/tasks/{done_task['id']}", json={"done": True})
 
     response = client.get("/tasks", params={"done": True})
-    
+
     body = response.json()
     ids = [t["id"] for t in body["items"]]
     assert ids == [done_task["id"]]
@@ -118,7 +118,7 @@ def test_list_pagination_does_not_overlap(client):
     assert len(page1["items"]) == 2
     assert len(page2["items"]) == 1
     assert {t["id"] for t in page1["items"] + page2["items"]} == created
-    
+
     assert page1["total"] == 3
     assert page2["total"] == 3
 
@@ -143,7 +143,7 @@ def test_list_returns_only_own_tasks(client, bob_headers):
     ids = [t["id"] for t in body["items"]]
     assert ids == [mine["id"]]
     assert body["total"] == 1
-    
+
     bobs = client.get("/tasks", headers=bob_headers).json()
     assert [t["title"] for t in bobs["items"]] == ["Bob's"]
     assert bobs["total"] == 1

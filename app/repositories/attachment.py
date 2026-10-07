@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Attachment
@@ -33,3 +33,23 @@ class AttachmentRepository:
             .filter(Attachment.status == "pending", Attachment.created_at < cutoff)
             .all()
         )
+
+    def list(
+        self, task_id: UUID, *, limit: int = 50, offset: int = 0
+    ) -> list[Attachment]:
+        stmt = (
+            select(Attachment)
+            .where(Attachment.task_id == task_id, Attachment.status == "uploaded")
+            .order_by(Attachment.created_at, Attachment.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self.db.scalars(stmt))
+
+    def count(self, task_id: UUID) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(Attachment)
+            .where(Attachment.task_id == task_id, Attachment.status == "uploaded")
+        )
+        return self.db.scalar(stmt) or 0

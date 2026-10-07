@@ -143,3 +143,14 @@ class AttachmentService:
 
         logger.info("Attachment cleanup: deleted %d stale pending rows", len(stale))
         return len(stale)
+
+    def list(
+        self, owner_id: UUID, task_id: UUID, *, limit: int = 50, offset: int = 0
+    ) -> tuple[list[Attachment], int]:
+        task = self.task_repo.get(owner_id, task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
+
+        items = self.repo.list(task_id, limit=limit, offset=offset)
+        total = self.repo.count(task_id)
+        return items, total
