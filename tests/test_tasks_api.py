@@ -101,9 +101,11 @@ def test_list_filters_by_done(client):
     client.patch(f"/tasks/{done_task['id']}", json={"done": True})
 
     response = client.get("/tasks", params={"done": True})
-
-    ids = [t["id"] for t in response.json()]
+    
+    body = response.json()
+    ids = [t["id"] for t in body["items"]]
     assert ids == [done_task["id"]]
+    assert body["total"] == 1
     assert open_task["id"] not in ids
 
 
@@ -113,9 +115,12 @@ def test_list_pagination_does_not_overlap(client):
     page1 = client.get("/tasks", params={"limit": 2, "offset": 0}).json()
     page2 = client.get("/tasks", params={"limit": 2, "offset": 2}).json()
 
-    assert len(page1) == 2
-    assert len(page2) == 1
-    assert {t["id"] for t in page1 + page2} == created
+    assert len(page1["items"]) == 2
+    assert len(page2["items"]) == 1
+    assert {t["id"] for t in page1["items"] + page2["items"]} == created
+    
+    assert page1["total"] == 3
+    assert page2["total"] == 3
 
 
 def test_list_rejects_out_of_range_limit(client):
@@ -134,11 +139,14 @@ def test_list_returns_only_own_tasks(client, bob_headers):
     mine = create_task(client, title="Alice's")
     client.post("/tasks", json={"title": "Bob's"}, headers=bob_headers)
 
-    ids = [t["id"] for t in client.get("/tasks").json()]
+    body = client.get("/tasks").json()
+    ids = [t["id"] for t in body["items"]]
     assert ids == [mine["id"]]
-
+    assert body["total"] == 1
+    
     bobs = client.get("/tasks", headers=bob_headers).json()
-    assert [t["title"] for t in bobs] == ["Bob's"]
+    assert [t["title"] for t in bobs["items"]] == ["Bob's"]
+    assert bobs["total"] == 1
 
 
 def test_cannot_read_other_users_task(client, bob_headers):

@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Task
@@ -36,3 +36,9 @@ class TaskRepository:
 
     def delete(self, task: Task) -> None:
         self.db.delete(task)
+
+    def count(self, owner_id: UUID, *, done: bool | None = None) -> int:
+        stmt = select(func.count()).select_from(Task).where(Task.owner_id == owner_id)
+        if done is not None:
+            stmt = stmt.where(Task.done == done)
+        return self.db.scalar(stmt) or 0
