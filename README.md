@@ -10,6 +10,7 @@ I built it as a hands-on project to learn production-style backend development: 
 
 - JWT authentication: register, login, `/users/me`, with argon2 password hashing
 - Refresh token rotation with theft detection: each refresh token is single-use; reusing an already-rotated token revokes the whole token family
+- Two client modes: native clients (mobile, CLI) get the refresh token in the JSON body, browsers only ever receive it as an `httpOnly` cookie that JavaScript cannot read
 - Task CRUD with filtering (`done`) and pagination (`limit`, `offset`)
 - Per-user data isolation: a user can only see and modify their own tasks
 - Database migrations with Alembic
@@ -18,7 +19,7 @@ I built it as a hands-on project to learn production-style backend development: 
 - Tests run against a real PostgreSQL database, each test isolated in a rolled-back transaction
 - CI/CD with GitHub Actions and keyless authentication to GCP (Workload Identity Federation)
 - A scheduled Cloud Run Job clears expired and revoked refresh tokens daily
-- Rate limiting on `/auth/register`, `/auth/login` and `/auth/refresh`, enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
+- Rate limiting on registration, login and refresh (shared between both client modes), enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
 - File attachments on tasks, stored in Cloud Storage: the API never handles file bytes, it only issues short-lived signed URLs for the client to upload to and download from directly
 - A second scheduled Cloud Run Job clears attachments that were never confirmed after upload
 - Alerting on elevated 5xx rates and on the service being unreachable, with the alert email linking back to the logs via the request ID
@@ -40,9 +41,12 @@ I built it as a hands-on project to learn production-style backend development: 
 | Method | Path | Description | Auth |
 |---|---|---|---|
 | `POST` | `/auth/register` | Create an account | no |
-| `POST` | `/auth/login` | OAuth2 password form (`username` is the email), returns an access + refresh token pair | no |
-| `POST` | `/auth/refresh` | Exchange a refresh token for a new pair (rotation) | no (refresh token in body) |
-| `POST` | `/auth/logout` | Revoke a refresh token | no (refresh token in body) |
+| `POST` | `/auth/login` | Native clients. OAuth2 password form (`username` is the email), returns an access + refresh token pair in JSON | no |
+| `POST` | `/auth/refresh` | Native clients. Exchange a refresh token (JSON body) for a new pair | no (refresh token in body) |
+| `POST` | `/auth/logout` | Native clients. Revoke a refresh token (JSON body) | no (refresh token in body) |
+| `POST` | `/auth/web/login` | Browsers. Same form; returns the access token in JSON and sets the refresh token as an `httpOnly` cookie | no |
+| `POST` | `/auth/web/refresh` | Browsers. Rotates the refresh token cookie, returns a new access token | no (refresh token cookie) |
+| `POST` | `/auth/web/logout` | Browsers. Revokes the refresh token and clears the cookie | no (refresh token cookie) |
 | `GET` | `/users/me` | Current user | yes |
 | `POST` | `/tasks` | Create a task | yes |
 | `GET` | `/tasks` | List own tasks, paginated. Query: `done`, `limit` (1-100, default 50), `offset` | yes |
@@ -56,11 +60,11 @@ I built it as a hands-on project to learn production-style backend development: 
 | `DELETE` | `/tasks/{id}/attachments/{attachment_id}` | Delete an attachment, from storage and the database | yes |
 | `GET` | `/health` | Liveness check (does not touch the database) | no |
 
-"Auth" here means the bearer access token on the `Authorization` header. `/auth/refresh` and `/auth/logout` instead take a refresh token in the JSON body, since that is the credential they operate on.
+"Auth" here means the bearer access token on the `Authorization` header, which works identically for both client modes. The refresh and logout endpoints instead operate on a refresh token: in the JSON body for native clients, in a cookie for browsers. The two modes never mix — see Design notes.
 
 Attachments are a three-step flow: `POST .../attachments` creates the record and returns a signed URL; the client `PUT`s the file straight to that URL (never through this API); then `POST .../confirm` checks the uploaded file's real size against `ATTACHMENT_MAX_SIZE_MB` and marks it ready. `download-url` and `DELETE` work the same way — the client talks to Cloud Storage directly using the URL the API hands it.
 
-`/auth/register`, `/auth/login` and `/auth/refresh` are rate limited and return `429` with a `Retry-After` header once the limit is exceeded.
+Registration, both login endpoints and both refresh endpoints are rate limited and return `429` with a `Retry-After` header once the limit is exceeded.
 
 List endpoints return a page envelope rather than a bare array, so a client can tell how much more there is to fetch:
 
@@ -109,6 +113,8 @@ cat > .env <<'EOF'
 DATABASE_URL=postgresql+psycopg://taskapi:taskapi@localhost:5432/taskapi
 SECRET_KEY=replace-me
 ENABLE_DOCS=true
+# Local dev runs over plain http, where a Secure cookie would never be stored
+REFRESH_COOKIE_SECURE=false
 EOF
 
 # Generate a real secret key and paste it into .env
@@ -152,6 +158,10 @@ Settings are read from environment variables (or from `.env` locally).
 | `SECRET_KEY` | required | Key used to sign JWTs. Never commit it |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access token (JWT) lifetime |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Refresh token lifetime |
+| `REFRESH_COOKIE_NAME` | `refresh_token` | Name of the browser refresh token cookie |
+| `REFRESH_COOKIE_SECURE` | `true` | Send the cookie over HTTPS only; set `false` for local http development |
+| `REFRESH_COOKIE_SAMESITE` | `lax` | Cookie `SameSite` policy |
+| `REFRESH_COOKIE_PATH` | `/api/auth/web` | Cookie path, as seen by the browser through the frontend's `/api` proxy |
 | `JWT_ALGORITHM` | `HS256` | Signing algorithm |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `LOG_JSON` | `false` | JSON logs (used on Cloud Run) instead of plain text |
@@ -204,6 +214,7 @@ app/
 ├── config.py          # settings from environment variables
 ├── database.py        # engine, session, Base
 ├── security.py        # password hashing and JWT helpers
+├── cookies.py         # refresh token cookie: set/clear with consistent attributes
 ├── logging_config.py  # text/JSON logging with request ID
 ├── middleware.py      # request ID, request log, catch-all 500
 ├── errors.py          # domain exceptions -> HTTP responses
@@ -230,6 +241,8 @@ infra/cleanup-policy.json   # Artifact Registry cleanup policy
 - **The client never sends an owner.** It is taken from the token.
 - **Authentication details.** Login returns the same error for an unknown email and a wrong password, and spends the same time hashing in both cases. Emails are stored lowercase. Registration races are resolved by the database's unique constraint (`409`).
 - **Refresh token rotation.** Refresh tokens are random values, stored in the database only as a SHA-256 hash (never as plain text, unlike the JWT access token which is never persisted at all). Each successful `/auth/refresh` call revokes the token just used and issues a new one in its place, so a refresh token works exactly once. Every token belongs to a `family_id` created at login. If a token that has already been rotated is presented again — the signature of a stolen, replayed token — the entire family is revoked, logging that user out on every device until they log in again. A separate `taskapi-cleanup-tokens` Cloud Run Job, triggered daily by Cloud Scheduler, deletes expired and long-revoked rows so the table doesn't grow unbounded; revoked rows are kept for a short grace period before deletion in case they are needed to investigate an incident.
+- **Two client modes, kept strictly apart.** Browsers have no storage that JavaScript can't read, so any XSS on the page could steal a refresh token kept in localStorage or memory. The `httpOnly` cookie is the one place a browser holds something scripts cannot touch. Native apps have OS-level secure storage (Keychain, Keystore) and no use for cookies, so they get the token in JSON. The rule is: a token that arrives as a cookie leaves only as a cookie, and one that arrives in the body leaves only in the body. A single endpoint accepting either and letting the client choose the response format would undo the protection — an injected script could call it with the cookie the browser attaches automatically and ask for JSON back. Separate `/auth/*` and `/auth/web/*` endpoints enforce this structurally, and tests assert that neither falls back to the other's channel. Both share the same rate limit keys, so alternating between them buys an attacker nothing.
+- **Cookie scope and CSRF.** The cookie is `httpOnly`, `Secure`, `SameSite=Lax` and scoped to `Path=/api/auth/web`, so the browser sends it only to the three web auth endpoints — not to `/tasks` or anything else. `SameSite=Lax` is enough against CSRF here because the frontend proxies `/api/*` to this service, so the browser sees a single origin and the cookie is first-party. Serving the frontend from a different origin would require `SameSite=None` and explicit CSRF tokens. A failed web refresh also clears the cookie, so the browser stops sending a dead token; native failures never set cookies.
 - **Logging.** One structured log line per request (method, path, status, duration), never bodies, query strings, passwords or tokens. The `X-Request-ID` header is accepted only if it is short and alphanumeric, to prevent log injection.
 - **Task ids are UUIDs**, so they are not guessable or enumerable.
 - **Attachments never pass through the API.** `POST .../attachments` only creates a database row (status `pending`) and returns a signed Cloud Storage URL; the client uploads directly to Cloud Storage, and `confirm` is what turns the row into `uploaded`, after checking the real object size. This keeps large file bytes off the Cloud Run instance entirely — it only ever issues and validates URLs. A `pending` row whose upload never gets confirmed (abandoned upload, crashed client) is cleaned up daily by `taskapi-cleanup-attachments`, which also removes the underlying object if one was partially uploaded. Listing a task's attachments returns only confirmed ones — `pending` is internal bookkeeping, not something a client should have to reason about.
