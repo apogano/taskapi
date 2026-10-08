@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     attachment_upload_url_expire_minutes: int = 15
     attachment_download_url_expire_minutes: int = 15
     attachment_max_size_mb: int = 25
+    refresh_cookie_path: str = "/api/auth/web"
+    refresh_cookie_name: str = "refresh_token"
+    refresh_cookie_secure: bool = True
+    refresh_cookie_samesite: str = "lax"
 
     model_config = SettingsConfigDict(env_file=".env")
 

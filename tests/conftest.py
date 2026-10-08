@@ -105,3 +105,12 @@ def fake_storage(monkeypatch):
     monkeypatch.setattr("app.services.attachment.delete_object", fake_delete_object)
 
     return uploaded_blobs
+
+
+@pytest.fixture(autouse=True)
+def cookie_settings_for_tests(monkeypatch):
+    # TestClient talks plain http to "testserver" and calls /auth/web/...
+    # directly, without the /api prefix the proxy adds.
+    # Set both explicity so tests never depend on whatever .env says
+    monkeypatch.setattr(settings, "refresh_cookie_secure", False)
+    monkeypatch.setattr(settings, "refresh_cookie_path", "/auth/web")
