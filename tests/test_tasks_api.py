@@ -181,4 +181,7 @@ def test_patch_rejects_null_for_non_nullable_fields(client):
     assert client.patch(f"/tasks/{task['id']}", json={"title": None}).status_code == 422
     assert client.patch(f"/tasks/{task['id']}", json={"done": None}).status_code == 422
     # description is nullable on purpose: null clears it
-    assert client.patch(f"/tasks/{task['id']}", json={"description": None}).status_code == 200
+    assert (
+        client.patch(f"/tasks/{task['id']}", json={"description": None}).status_code
+        == 200
+    )
