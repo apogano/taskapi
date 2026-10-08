@@ -31,3 +31,8 @@ class TokenPair(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
+
+
+class AccessToken(BaseModel):
+    access_token: str
+    token_type: str = "bearer"

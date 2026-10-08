@@ -6,7 +6,14 @@ from app.schemas.attachment import (
 )
 from app.schemas.pagination import Page
 from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
-from app.schemas.user import RefreshRequest, Token, TokenPair, UserCreate, UserRead
+from app.schemas.user import (
+    AccessToken,
+    RefreshRequest,
+    Token,
+    TokenPair,
+    UserCreate,
+    UserRead,
+)
 
 __all__ = [
     "TaskCreate",
@@ -16,6 +23,7 @@ __all__ = [
     "UserCreate",
     "UserRead",
     "TokenPair",
+    "AccessToken",
     "RefreshRequest",
     "AttachmentRead",
     "AttachmentCreate",
