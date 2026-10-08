@@ -88,17 +88,18 @@ def test_failed_web_refresh_clears_the_cookie(client):
     assert response.status_code == 401
     assert "max-age=0" in response.headers["set-cookie"].lower()
 
-#--- the two flows (native and web) must never cross over ---
+
+# --- the two flows (native and web) must never cross over ---
 def test_web_refresh_ignores_a_token_in_the_body(client):
     register(client)
     tokens = native_login(client).json()
     client.cookies.clear()
 
     response = client.post(
-        "/auth/web/refresh",
-        json={"refresh_token":tokens["refresh_token"]}
+        "/auth/web/refresh", json={"refresh_token": tokens["refresh_token"]}
     )
     assert response.status_code == 401
+
 
 def test_native_refresh_ignores_the_cookie(client):
     register(client)
@@ -109,12 +110,14 @@ def test_native_refresh_ignores_the_cookie(client):
     response = client.post("/auth/refresh", headers={"Cookie": f"{COOKIE}={token}"})
     assert response.status_code == 422
 
+
 def test_native_login_sets_no_cookie(client):
     register(client)
     response = native_login(client)
 
     assert response.status_code == 200
     assert "set-cookie" not in response.headers
+
 
 def test_web_and_native_login_share_rate_limits(client):
     register(client)
@@ -125,6 +128,7 @@ def test_web_and_native_login_share_rate_limits(client):
     # Alternating endpoints must not have bought any extra attempts
     assert native_login(client, password="wrong-password").status_code == 429
     assert web_login(client, password="wrong-password").status_code == 429
+
 
 def test_failed_native_refresh_sets_no_cookie(client):
     response = client.post("/auth/refresh", json={"refresh_token": "not-a-real-token"})

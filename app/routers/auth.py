@@ -141,6 +141,7 @@ def web_login(
     set_refresh_cookie(response, pair.refresh_token)
     return schemas.AccessToken(access_token=pair.access_token)
 
+
 def _invalid_web_refresh() -> JSONResponse:
     # A dead cookie is useless: tell the browser to drop it so it stops
     # sending it. Only the web flow does this; native clients never get cookies.
@@ -151,6 +152,7 @@ def _invalid_web_refresh() -> JSONResponse:
     )
     clear_refresh_cookie(error)
     return error
+
 
 @router.post("/web/refresh", response_model=schemas.AccessToken)
 def web_refresh(
