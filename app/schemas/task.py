@@ -10,9 +10,9 @@ class TaskCreate(BaseModel):
 
 
 class TaskUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=200)
+    title: str = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
-    done: bool | None = None
+    done: bool = Field(default=None)
 
 
 class TaskRead(BaseModel):
