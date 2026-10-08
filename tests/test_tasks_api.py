@@ -173,3 +173,15 @@ def test_cannot_delete_other_users_task(client, bob_headers):
 
     assert response.status_code == 404
     assert client.get(f"/tasks/{task['id']}").status_code == 200
+
+
+def test_patch_rejects_null_for_non_nullable_fields(client):
+    task = create_task(client)
+
+    assert client.patch(f"/tasks/{task['id']}", json={"title": None}).status_code == 422
+    assert client.patch(f"/tasks/{task['id']}", json={"done": None}).status_code == 422
+    # description is nullable on purpose: null clears it
+    assert (
+        client.patch(f"/tasks/{task['id']}", json={"description": None}).status_code
+        == 200
+    )
