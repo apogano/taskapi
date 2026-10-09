@@ -115,3 +115,21 @@ def test_per_account_limit_uses_email_case_insensitively(client):
         client, "10.0.2.999", email="ALICE@EXAMPLE.COM", password="wrong-password"
     )
     assert blocked.status_code == 429
+
+
+def test_spoofed_forwarded_for_does_not_bypass_ip_limit(client):
+    # Different fake leading IPs and different emails (so the per-account
+    # limit never triggers), but the same address appended by Cloud Run
+    for i in range(settings.rate_limit_login_attempts):
+        client.post(
+            "/auth/login",
+            data={"username": f"spoof{i}@example.com", "password": "wrong-password"},
+            headers={"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.5"},
+        )
+
+    response = client.post(
+        "/auth/login",
+        data={"username": "spoof-last@example.com", "password": "wrong-password"},
+        headers={"X-Forwarded-For": "10.0.0.99, 203.0.113.5"},
+    )
+    assert response.status_code == 429

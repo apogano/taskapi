@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     refresh_cookie_name: str = "refresh_token"
     refresh_cookie_secure: bool = True
     refresh_cookie_samesite: str = "lax"
+    # Shared with the frontend proxy. Empty means no proxy is trusted.
+    proxy_shared_secret: str = ""
     log_forwarded_for: bool = False
 
     model_config = SettingsConfigDict(env_file=".env")
