@@ -6,6 +6,7 @@ import uuid
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.logging_config import request_id_var
 
 logger = logging.getLogger("app.request")
@@ -19,6 +20,16 @@ async def request_context_middleware(request: Request, call_next):
     )
     token = request_id_var.set(request_id)
     start = time.perf_counter()
+
+    if settings.log_forwarded_for:
+        # Diagnostic only, off by default: IP addresses are personal data
+        logger.info(
+            "Forwarded-For debug",
+            extra={
+                "x_forwarded_for": request.headers.get("X-Forwarded-For"),
+                "peer": request.client.host if request.client else None,
+            },
+        )
     try:
         try:
             response = await call_next(request)
