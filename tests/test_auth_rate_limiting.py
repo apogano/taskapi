@@ -1,4 +1,5 @@
 from app.config import settings
+from app.models import RateLimitHit
 
 EMAIL = "alice@example.com"
 PASSWORD = "test-password"
@@ -133,3 +134,18 @@ def test_spoofed_forwarded_for_does_not_bypass_ip_limit(client):
         headers={"X-Forwarded-For": "10.0.0.99, 203.0.113.5"},
     )
     assert response.status_code == 429
+
+
+def test_rate_limit_rows_contain_no_ip_or_email(client, db):
+    client.post(
+        "/auth/login",
+        data={"username": "alice@example.com", "password": "wrong-password"},
+        headers={"X-Forwarded-For": "203.0.113.5"},
+    )
+
+    keys = [key for (key,) in db.query(RateLimitHit.key).all()]
+
+    assert {key.split(":")[0] for key in keys} == {"login", "login-account"}
+    for key in keys:
+        assert "203.0.113.5" not in key
+        assert "alice@example.com" not in key

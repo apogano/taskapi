@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 
 from app.config import settings
-from app.rate_limiting.keys import client_ip
+from app.rate_limiting.keys import client_ip, rate_limit_key
 from app.rate_limiting.postgres import PostgresRateLimiter
 
 
@@ -102,3 +102,24 @@ def test_proxy_client_ip_is_ignored_when_no_secret_is_configured(monkeypatch):
         }
     )
     assert client_ip(request) == "203.0.113.9"
+
+
+def test_rate_limit_key_is_stable_and_keeps_the_scope():
+    assert rate_limit_key("login", "203.0.113.5") == rate_limit_key(
+        "login", "203.0.113.5"
+    )
+    assert rate_limit_key("login", "203.0.113.5").startswith("login:")
+
+
+def test_rate_limit_key_differs_per_identifier_and_scope():
+    assert rate_limit_key("login", "203.0.113.5") != rate_limit_key(
+        "login", "203.0.113.6"
+    )
+    # Same IP, different limit:must not share a counter
+    assert (
+        rate_limit_key("login", "203.0.113.5").split(":")[1]
+        == rate_limit_key("refresh", "203.0.113.5").split(":")[1]
+    )
+    assert rate_limit_key("login", "203.0.113.5") != rate_limit_key(
+        "refresh", "203.0.113.5"
+    )
