@@ -9,7 +9,7 @@ from app.config import settings
 from app.cookies import clear_refresh_cookie, set_refresh_cookie
 from app.dependencies.auth import AuthServiceDep, UserServiceDep
 from app.dependencies.rate_limit import RateLimiterDep
-from app.rate_limiting.keys import client_ip
+from app.rate_limiting.keys import client_ip, rate_limit_key
 from app.services.auth import InvalidRefreshTokenError
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -46,7 +46,7 @@ def register(
     enforce_rate_limit(
         limiter,
         (
-            f"register:{client_ip(request)}",
+            rate_limit_key("register", client_ip(request)),
             settings.rate_limit_register_attempts,
             settings.rate_limit_register_window_seconds,
         ),
@@ -64,12 +64,12 @@ def _login(form, request, user_service, auth_service, limiter) -> schemas.TokenP
     enforce_rate_limit(
         limiter,
         (
-            f"login:{client_ip(request)}",
+            rate_limit_key("login", client_ip(request)),
             settings.rate_limit_login_attempts,
             settings.rate_limit_login_window_seconds,
         ),
         (
-            f"login-account:{form.username.strip().lower()}",
+            rate_limit_key("login-account", form.username.strip().lower()),
             settings.rate_limit_login_account_attempts,
             settings.rate_limit_login_account_window_seconds,
         ),
