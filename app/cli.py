@@ -47,7 +47,7 @@ def cleanup_rate_limits() -> None:
 COMMANDS = {
     "cleanup-refresh-tokens": cleanup_refresh_tokens,
     "cleanup-stale-attachments": cleanup_stale_attachments,
-    "cleanup_rate_limits": cleanup_rate_limits,
+    "cleanup-rate-limits": cleanup_rate_limits,
 }
 
 if __name__ == "__main__":
