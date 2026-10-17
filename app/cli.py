@@ -5,6 +5,7 @@ import sys
 
 from app.database import SessionLocal
 from app.logging_config import setup_logging
+from app.rate_limiting.postgres import PostgresRateLimiter
 from app.repositories.attachment import AttachmentRepository
 from app.repositories.refresh_token import RefreshTokenRepository
 from app.repositories.task import TaskRepository
@@ -33,9 +34,20 @@ def cleanup_stale_attachments() -> None:
         db.close()
 
 
+def cleanup_rate_limits() -> None:
+    db = SessionLocal()
+    try:
+        deleted = PostgresRateLimiter(db).delete_expired()
+        db.commit()
+        logger.info("Rate limit cleanup:deleted %d rows", deleted)
+    finally:
+        db.close()
+
+
 COMMANDS = {
     "cleanup-refresh-tokens": cleanup_refresh_tokens,
     "cleanup-stale-attachments": cleanup_stale_attachments,
+    "cleanup_rate_limits": cleanup_rate_limits,
 }
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -31,3 +32,13 @@ class PostgresRateLimiter(RateLimiter):
             return RateLimitResult(allowed=False, retry_after_seconds=retry_after)
 
         return RateLimitResult(allowed=True)
+
+    def delete_expired(self, older_than: timedelta = timedelta(days=1)) -> int:
+        """Removes records that can no longer affect any limi.
+        Postgres-specific, so not part of the RateLimiter interface.
+        """
+        cutoff = datetime.now(UTC) - older_than
+        result = self.db.execute(
+            delete(RateLimitHit).where(RateLimitHit.window_start < cutoff)
+        )
+        return result.rowcount
