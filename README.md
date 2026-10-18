@@ -6,6 +6,8 @@ A multi-user task management REST API built with FastAPI and PostgreSQL, deploye
 
 I built it as a hands-on project to learn production-style backend development: layered architecture, database migrations, authentication, testing, structured logging and cloud deployment.
 
+A React + TypeScript web client lives in a separate repository, [`taskapi-web`](https://github.com/apogano/taskapi-web). It is served by its own Cloud Run service, which also reverse-proxies `/api/*` to this one, so the browser sees a single origin.
+
 ## Features
 
 - JWT authentication: register, login, `/users/me`, with argon2 password hashing
@@ -18,10 +20,11 @@ I built it as a hands-on project to learn production-style backend development: 
 - Consistent error handling: unexpected errors return a generic 500 and never leak internals
 - Tests run against a real PostgreSQL database, each test isolated in a rolled-back transaction
 - CI/CD with GitHub Actions and keyless authentication to GCP (Workload Identity Federation)
-- A scheduled Cloud Run Job clears expired and revoked refresh tokens daily
 - Rate limiting on registration, login and refresh (shared between both client modes), enforced per IP and, for login, also per account, backed by PostgreSQL so it stays correct across multiple instances
+- Client IPs resolved from the proxy chain in a way clients cannot spoof, so the per-IP limits can't be bypassed with a forged `X-Forwarded-For`
+- Rate limit counters store keyed hashes, never raw IP addresses or emails, and are purged a day after their window ends
 - File attachments on tasks, stored in Cloud Storage: the API never handles file bytes, it only issues short-lived signed URLs for the client to upload to and download from directly
-- A second scheduled Cloud Run Job clears attachments that were never confirmed after upload
+- Three scheduled Cloud Run Jobs keep the database tidy: expired and revoked refresh tokens, attachments never confirmed after upload, and old rate limit windows
 - Alerting on elevated 5xx rates and on the service being unreachable, with the alert email linking back to the logs via the request ID
 
 ## Tech stack
@@ -165,8 +168,10 @@ Settings are read from environment variables (or from `.env` locally).
 | `JWT_ALGORITHM` | `HS256` | Signing algorithm |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 | `LOG_JSON` | `false` | JSON logs (used on Cloud Run) instead of plain text |
+| `LOG_FORWARDED_FOR` | `false` | Diagnostic only: log the raw `X-Forwarded-For` and peer address of each request. Off by default, since IP addresses are personal data |
 | `ENABLE_DOCS` | `false` | Serve `/docs`, `/redoc` and `/openapi.json` |
 | `RATE_LIMIT_BACKEND` | `postgres` | Rate limit storage backend (see Design notes) |
+| `PROXY_SHARED_SECRET` | empty | Shared with the web frontend's proxy, which uses it to vouch for the client IP it forwards. Empty disables that path entirely |
 | `RATE_LIMIT_LOGIN_ATTEMPTS` / `RATE_LIMIT_LOGIN_WINDOW_SECONDS` | `5` / `900` | Per-IP login attempts |
 | `RATE_LIMIT_LOGIN_ACCOUNT_ATTEMPTS` / `RATE_LIMIT_LOGIN_ACCOUNT_WINDOW_SECONDS` | `10` / `900` | Per-account login attempts |
 | `RATE_LIMIT_REGISTER_ATTEMPTS` / `RATE_LIMIT_REGISTER_WINDOW_SECONDS` | `3` / `3600` | Per-IP registration attempts |
@@ -218,18 +223,22 @@ app/
 ├── logging_config.py  # text/JSON logging with request ID
 ├── middleware.py      # request ID, request log, catch-all 500
 ├── errors.py          # domain exceptions -> HTTP responses
-├── cli.py             # maintenance commands (stale token/attachment cleanup), run outside the request cycle
+├── cli.py             # maintenance commands (token, attachment and rate limit cleanup), run outside the request cycle
 ├── storage.py         # Cloud Storage signed URL generation (IAM-based signing)
-├── rate_limiting/     # RateLimiter interface + PostgreSQL implementation
+├── rate_limiting/     # RateLimiter interface, PostgreSQL implementation, client IP and key helpers
 ├── dependencies/      # FastAPI dependency providers (services, current user)
 ├── routers/           # HTTP layer only
 ├── services/          # business logic and transaction boundaries
 ├── repositories/      # database queries only
-├── models/            # SQLAlchemy models (Task, User, RefreshToken, Attachment)
+├── models/            # SQLAlchemy models (Task, User, RefreshToken, Attachment, RateLimitHit)
 └── schemas/           # Pydantic request/response models
 migrations/            # Alembic
 tests/
-infra/cleanup-policy.json   # Artifact Registry cleanup policy
+infra/
+├── cleanup-policy.json     # Artifact Registry cleanup policy
+├── storage-cors.json       # which origins may upload to the attachments bucket
+├── alert-5xx.yaml          # 5xx rate alert policy
+└── uptime-health.yaml      # uptime check (exported, documentation only)
 .github/workflows/ci.yml    # CI/CD pipeline
 ```
 
@@ -239,15 +248,18 @@ infra/cleanup-policy.json   # Artifact Registry cleanup policy
 - **Dependency injection.** Repositories and services are provided through FastAPI dependencies, so tests can substitute fakes.
 - **Ownership is enforced in the query.** Every task query filters by `owner_id`. Someone else's task returns `404`, not `403`, so its existence is not revealed.
 - **The client never sends an owner.** It is taken from the token.
+- **Partial updates distinguish "absent" from "null".** In a `PATCH`, an omitted field is left unchanged. An explicit `null` is accepted only where the column is nullable (`description`, to clear it); `null` for `title` or `done` is rejected with `422` instead of reaching the database and failing as a `500`. This bug was found by the frontend's TypeScript compiler, through types generated from the OpenAPI schema, before any test caught it.
 - **Authentication details.** Login returns the same error for an unknown email and a wrong password, and spends the same time hashing in both cases. Emails are stored lowercase. Registration races are resolved by the database's unique constraint (`409`).
 - **Refresh token rotation.** Refresh tokens are random values, stored in the database only as a SHA-256 hash (never as plain text, unlike the JWT access token which is never persisted at all). Each successful `/auth/refresh` call revokes the token just used and issues a new one in its place, so a refresh token works exactly once. Every token belongs to a `family_id` created at login. If a token that has already been rotated is presented again — the signature of a stolen, replayed token — the entire family is revoked, logging that user out on every device until they log in again. A separate `taskapi-cleanup-tokens` Cloud Run Job, triggered daily by Cloud Scheduler, deletes expired and long-revoked rows so the table doesn't grow unbounded; revoked rows are kept for a short grace period before deletion in case they are needed to investigate an incident.
 - **Two client modes, kept strictly apart.** Browsers have no storage that JavaScript can't read, so any XSS on the page could steal a refresh token kept in localStorage or memory. The `httpOnly` cookie is the one place a browser holds something scripts cannot touch. Native apps have OS-level secure storage (Keychain, Keystore) and no use for cookies, so they get the token in JSON. The rule is: a token that arrives as a cookie leaves only as a cookie, and one that arrives in the body leaves only in the body. A single endpoint accepting either and letting the client choose the response format would undo the protection — an injected script could call it with the cookie the browser attaches automatically and ask for JSON back. Separate `/auth/*` and `/auth/web/*` endpoints enforce this structurally, and tests assert that neither falls back to the other's channel. Both share the same rate limit keys, so alternating between them buys an attacker nothing.
 - **Cookie scope and CSRF.** The cookie is `httpOnly`, `Secure`, `SameSite=Lax` and scoped to `Path=/api/auth/web`, so the browser sends it only to the three web auth endpoints — not to `/tasks` or anything else. `SameSite=Lax` is enough against CSRF here because the frontend proxies `/api/*` to this service, so the browser sees a single origin and the cookie is first-party. Serving the frontend from a different origin would require `SameSite=None` and explicit CSRF tokens. A failed web refresh also clears the cookie, so the browser stops sending a dead token; native failures never set cookies.
+- **Client IP resolution.** Per-IP limits are only as good as the IP they key on. `X-Forwarded-For` is a list that every proxy appends to, and the client can send its own entries first, so its leftmost value is attacker-controlled. Measuring what actually arrives showed that Cloud Run, without a load balancer, appends exactly one entry: the address it saw. So the rightmost entry is the only trustworthy one, and that is what `client_ip()` uses. (An external load balancer appends two entries, which would change the rule — hence a comment in the code.) Browser traffic adds a hop: it arrives through the frontend's proxy, so the rightmost entry would be the proxy itself, shared by every web user. The proxy therefore resolves the client IP on its side, by the same rule, and sends it in `X-Client-IP` along with `X-Proxy-Secret`. The backend trusts that header only when the secret matches, using a constant-time comparison, and ignores it entirely when no secret is configured — otherwise an empty header would match an empty setting. A test reproduces the original bypass: forged leading entries with different emails must still hit the per-IP limit.
+- **Data minimisation in rate limiting.** The limiter only ever compares keys for equality, so it never needs the IP or email they came from. Keys are stored as `scope:HMAC(value)` — the scope stays readable (`login`, `register`, ...) so a row still shows which limit it belongs to, but not who it belongs to. The hash is keyed with a subkey derived from `SECRET_KEY` and used for nothing else. It has to be keyed: there are only about 4 billion IPv4 addresses, so a plain SHA-256 of all of them is quick to compute and would reverse any key by lookup. Windows are deleted a day after they close by `taskapi-cleanup-rate-limits` — far longer than the longest window (one hour), and far shorter than keeping them forever. Cleanup is a method of the PostgreSQL implementation, not of the `RateLimiter` interface: a Redis implementation would give each key a TTL and never need it. Two other places hold IPs: the diagnostic `LOG_FORWARDED_FOR` log is off by default, and Cloud Run's own request logs record each client IP, retained according to Cloud Logging's retention setting (30 days by default).
 - **Logging.** One structured log line per request (method, path, status, duration), never bodies, query strings, passwords or tokens. The `X-Request-ID` header is accepted only if it is short and alphanumeric, to prevent log injection.
 - **Task ids are UUIDs**, so they are not guessable or enumerable.
 - **Attachments never pass through the API.** `POST .../attachments` only creates a database row (status `pending`) and returns a signed Cloud Storage URL; the client uploads directly to Cloud Storage, and `confirm` is what turns the row into `uploaded`, after checking the real object size. This keeps large file bytes off the Cloud Run instance entirely — it only ever issues and validates URLs. A `pending` row whose upload never gets confirmed (abandoned upload, crashed client) is cleaned up daily by `taskapi-cleanup-attachments`, which also removes the underlying object if one was partially uploaded. Listing a task's attachments returns only confirmed ones — `pending` is internal bookkeeping, not something a client should have to reason about.
 - **Signing without a private key.** Cloud Run's service account credentials have no private key to sign with locally (consistent with the keyless setup used everywhere else in this project), so `app/storage.py` routes signing through the IAM Credentials API's `signBlob`, authenticated as the service account itself. This needs one extra IAM grant beyond normal Storage access: `roles/iam.serviceAccountTokenCreator` on the service account, for itself. The same code path works unchanged locally, where it works by impersonating that service account via your own `gcloud auth application-default login` identity.
-- **Rate limiting is behind a `RateLimiter` interface** (`app/rate_limiting/base.py`) with a single `hit(key, limit, window_seconds)` method. The only implementation today is PostgreSQL-backed, using an atomic `INSERT ... ON CONFLICT DO UPDATE count = count + 1` fixed-window counter, which stays correct under concurrent requests across multiple Cloud Run instances without needing a lock or a read-then-write round trip. Redis would be the conventional choice for this, but it requires an always-on Memorystore instance (no free tier, no scale-to-zero) plus a Serverless VPC Access connector for Cloud Run to reach it — not worth the cost and complexity at this project's scale when Postgres, which is already there, does the job correctly. The interface means swapping in a Redis-backed implementation later touches one dependency provider, not the endpoints. Login is protected by two independent limits: per-IP (stops one IP hammering many accounts) and per-account (stops one account being hammered from many IPs, e.g. a botnet); the account-scoped key is the submitted email as-is, so the check never has to look up whether the account exists.
+- **Rate limiting is behind a `RateLimiter` interface** (`app/rate_limiting/base.py`) with a single `hit(key, limit, window_seconds)` method. The only implementation today is PostgreSQL-backed, using an atomic `INSERT ... ON CONFLICT DO UPDATE count = count + 1` fixed-window counter, which stays correct under concurrent requests across multiple Cloud Run instances without needing a lock or a read-then-write round trip. Redis would be the conventional choice for this, but it requires an always-on Memorystore instance (no free tier, no scale-to-zero) plus a Serverless VPC Access connector for Cloud Run to reach it — not worth the cost and complexity at this project's scale when Postgres, which is already there, does the job correctly. The interface means swapping in a Redis-backed implementation later touches one dependency provider, not the endpoints. Login is protected by two independent limits: per-IP (stops one IP hammering many accounts) and per-account (stops one account being hammered from many IPs, e.g. a botnet); the account-scoped key is built from the submitted email, without looking up whether the account exists, so the check can't be used to tell which emails are registered.
 
 ## Deployment
 
@@ -262,22 +274,35 @@ flowchart LR
     Deploy --> Smoke["Smoke test: GET /health"]
     Scheduler["Cloud Scheduler, daily"] -.-> CleanupTokens["taskapi-cleanup-tokens runs"]
     Scheduler -.-> CleanupAttachments["taskapi-cleanup-attachments runs"]
+    Scheduler -.-> CleanupRateLimits["taskapi-cleanup-rate-limits runs"]
 ```
 
-**Runtime.** The API runs on Cloud Run and connects to Cloud SQL (PostgreSQL) through the Cloud SQL unix socket, with no public database access. `SECRET_KEY` and `DATABASE_URL` come from Secret Manager. The container runs as a non-root user and the image contains no secrets.
+**Runtime.** The API runs on Cloud Run and connects to Cloud SQL (PostgreSQL) through the Cloud SQL unix socket, with no public database access. `SECRET_KEY`, `DATABASE_URL` and `PROXY_SHARED_SECRET` come from Secret Manager. The container runs as a non-root user and the image contains no secrets.
+
+The service stays publicly reachable, because native clients call it directly. Browsers reach it through the web frontend's proxy instead (see `taskapi-web`), which is why the refresh cookie is scoped to `/api/auth/web`, the path the browser sees.
 
 **On every pull request**, the workflow runs `ruff check`, `ruff format --check`, the test suite on a PostgreSQL service container, and applies all migrations to an empty database followed by `alembic check`. The tests create the schema with `create_all` for speed, so this last step is what verifies the migrations themselves.
 
-**On every merge to `main`**, if the checks pass, the workflow builds the image (tagged with the commit SHA), runs the migrations as a Cloud Run Job, points both cleanup jobs at the same new image, deploys the new revision and calls `/health`. Migrations run before the deploy, so a failed migration leaves the previous version serving traffic. Deployments are serialized with a `concurrency` group.
+**On every merge to `main`**, if the checks pass, the workflow builds the image (tagged with the commit SHA), runs the migrations as a Cloud Run Job, points the three cleanup jobs at the same new image, deploys the new revision and calls `/health`. Migrations run before the deploy, so a failed migration leaves the previous version serving traffic. Deployments are serialized with a `concurrency` group.
 
-**Scheduled maintenance.** `taskapi-cleanup-tokens` and `taskapi-cleanup-attachments` are Cloud Run Jobs built from the same image as the service, run with `python -m app.cli <command>` instead of `uvicorn`. Cloud Scheduler triggers invoke them once a day — the former deletes expired and long-revoked refresh tokens, the latter deletes attachment rows (and any partially-uploaded object) whose upload was never confirmed. Both are kept up to date by the deploy pipeline above rather than by their own build step.
+**Scheduled maintenance.** Three Cloud Run Jobs, built from the same image as the service and run with `python -m app.cli <command>` instead of `uvicorn`, each triggered daily by Cloud Scheduler:
 
-**Least privilege.** Two service accounts with separate roles:
+| Job | Command | Deletes |
+|---|---|---|
+| `taskapi-cleanup-tokens` | `cleanup-refresh-tokens` | Expired refresh tokens, and revoked ones past a short grace period |
+| `taskapi-cleanup-attachments` | `cleanup-stale-attachments` | Attachment rows never confirmed after upload, and any partially uploaded object |
+| `taskapi-cleanup-rate-limits` | `cleanup-rate-limits` | Rate limit windows that closed more than a day ago |
+
+All three are kept up to date by the deploy pipeline above rather than by their own build step. Each command name lives in two places that nothing links — `cli.py`, and the job's `--command` in GCP — so `tests/test_cli.py` asserts that every command the jobs call still exists. A rename that would break a job fails CI instead of failing silently at 4am.
+
+**Least privilege.** One identity per job to do, each with only what that job needs:
 
 | Service account | Purpose | Permissions |
 |---|---|---|
-| `taskapi-run` | Runs the app | Cloud SQL Client, access to the two secrets |
+| `taskapi-run` | Runs the app and the jobs | Cloud SQL Client, access to its three secrets, read/write on the attachments bucket, sign URLs as itself |
 | `github-deployer` | Used by GitHub Actions | Cloud Run Developer, write access to the Artifact Registry repository, act as `taskapi-run` |
+| `taskapi-scheduler` | Used by Cloud Scheduler | Invoke the three cleanup jobs, nothing else |
+| `taskapi-web-run` | Runs the web frontend | Read `proxy-shared-secret`, nothing else |
 
 GitHub authenticates through **Workload Identity Federation**, so no service account key exists anywhere. The provider only accepts tokens from this repository on the `main` branch.
 
@@ -337,13 +362,15 @@ CONN=$(gcloud sql instances describe taskapi-db --format='value(connectionName)'
 printf %s "postgresql+psycopg://taskapi:${DB_PASSWORD}@/taskapi?host=/cloudsql/${CONN}" \
   | gcloud secrets create database-url --data-file=-
 openssl rand -hex 32 | tr -d '\n' | gcloud secrets create secret-key --data-file=-
+# Shared with the web frontend's proxy; that repo's setup grants its own service account access
+openssl rand -hex 32 | tr -d '\n' | gcloud secrets create proxy-shared-secret --data-file=-
 
 # Runtime service account
 gcloud iam service-accounts create taskapi-run --display-name="Task API runtime"
 SA=taskapi-run@${PROJECT_ID}.iam.gserviceaccount.com
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="serviceAccount:$SA" --role="roles/cloudsql.client"
-for s in database-url secret-key; do
+for s in database-url secret-key proxy-shared-secret; do
   gcloud secrets add-iam-policy-binding $s \
     --member="serviceAccount:$SA" --role="roles/secretmanager.secretAccessor"
 done
@@ -362,12 +389,15 @@ gcloud storage buckets add-iam-policy-binding gs://${PROJECT_ID}-attachments \
 gcloud iam service-accounts add-iam-policy-binding $SA \
   --member="serviceAccount:$SA" --role="roles/iam.serviceAccountTokenCreator"
 gcloud services enable iamcredentials.googleapis.com
+# Browsers upload straight to the bucket, which is cross-origin, so the bucket must allow it.
+# Edit the origins in the file (local dev server, deployed frontend URL) first.
+gcloud storage buckets update gs://${PROJECT_ID}-attachments --cors-file=infra/storage-cors.json
 
 # First deployment. It stores the service configuration (service account,
 # secrets, Cloud SQL, env vars); the pipeline later only changes the image.
 gcloud run deploy taskapi --source . --region $REGION \
   --service-account $SA --add-cloudsql-instances $CONN \
-  --set-secrets SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest \
+  --set-secrets SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest,PROXY_SHARED_SECRET=proxy-shared-secret:latest \
   --set-env-vars LOG_JSON=true,GCS_BUCKET_NAME=${PROJECT_ID}-attachments,GCS_SIGNER_SERVICE_ACCOUNT=$SA \
   --max-instances 2 --allow-unauthenticated
 
@@ -394,12 +424,18 @@ gcloud run jobs create taskapi-cleanup-attachments --image=$IMAGE --region=$REGI
   --set-env-vars=LOG_JSON=true,GCS_BUCKET_NAME=${PROJECT_ID}-attachments,GCS_SIGNER_SERVICE_ACCOUNT=$SA \
   --command=python,-m,app.cli,cleanup-stale-attachments --max-retries=1 --task-timeout=300
 
-# Cloud Scheduler: run both cleanup jobs once a day
+gcloud run jobs create taskapi-cleanup-rate-limits --image=$IMAGE --region=$REGION \
+  --service-account=$SA --set-cloudsql-instances=$CONN \
+  --set-secrets=SECRET_KEY=secret-key:latest,DATABASE_URL=database-url:latest \
+  --set-env-vars=LOG_JSON=true \
+  --command=python,-m,app.cli,cleanup-rate-limits --max-retries=1 --task-timeout=300
+
+# Cloud Scheduler: run each cleanup job once a day
 gcloud services enable cloudscheduler.googleapis.com
 gcloud iam service-accounts create taskapi-scheduler \
   --display-name="Cloud Scheduler for taskapi jobs"
 SCHEDULER_SA=taskapi-scheduler@${PROJECT_ID}.iam.gserviceaccount.com
-for job in taskapi-cleanup-tokens taskapi-cleanup-attachments; do
+for job in taskapi-cleanup-tokens taskapi-cleanup-attachments taskapi-cleanup-rate-limits; do
   gcloud run jobs add-iam-policy-binding $job --region=$REGION \
     --member="serviceAccount:$SCHEDULER_SA" --role="roles/run.invoker"
 done
@@ -410,6 +446,10 @@ gcloud scheduler jobs create http taskapi-cleanup-tokens-schedule \
 gcloud scheduler jobs create http taskapi-cleanup-attachments-schedule \
   --location=$REGION --schedule="0 5 * * *" \
   --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/taskapi-cleanup-attachments:run" \
+  --http-method=POST --oauth-service-account-email=$SCHEDULER_SA
+gcloud scheduler jobs create http taskapi-cleanup-rate-limits-schedule \
+  --location=$REGION --schedule="0 6 * * *" \
+  --uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/taskapi-cleanup-rate-limits:run" \
   --http-method=POST --oauth-service-account-email=$SCHEDULER_SA
 
 # Deployer service account for GitHub Actions
@@ -475,6 +515,7 @@ While the database is stopped, endpoints that need it return `500`; `/health` ke
 - Background jobs (Cloud Tasks or Pub/Sub), for example notifications when a task is completed
 - Cursor-based pagination, which avoids the duplicate/skipped rows that offset pagination can produce when the data changes between pages
 - User roles, once there is a use case that needs them
+- A separate attachments bucket for local development, so abandoned local uploads can't leave objects in the production bucket that its cleanup job never sees
 
 ## License
 
